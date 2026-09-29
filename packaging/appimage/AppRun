@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# AnonVoid — AppImage Giriş Noktası (AppRun)
+# ==============================================================================
+
+set -e
+
+# AppDir konumunu belirle
+APPDIR="$(dirname "$(readlink -f "$0")")"
+export APPDIR
+
+# Bytecode üretimini kesinlikle engelle
+export PYTHONDONTWRITEBYTECODE=1
+
+# Kütüphane ve Python yollarını ayarla
+export PATH="$APPDIR/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="$APPDIR/usr/share/anonvoid:$APPDIR/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
+
+# XDG ve Qt ayarları
+export QT_PLUGIN_PATH="$APPDIR/usr/plugins:${QT_PLUGIN_PATH:-}"
+export QML2_IMPORT_PATH="$APPDIR/usr/qml:${QML2_IMPORT_PATH:-}"
+
+# İkili dosya önceliği: Eğer derlenmiş C++ ikilisi varsa onu çalıştır, yoksa Python ile başlat
+if [ -x "$APPDIR/usr/bin/anonvoid" ]; then
+    exec "$APPDIR/usr/bin/anonvoid" "$@"
+elif [ -x "$APPDIR/usr/bin/fp-cleaner" ]; then
+    exec "$APPDIR/usr/bin/fp-cleaner" "$@"
+elif [ -f "$APPDIR/usr/share/anonvoid/main.py" ]; then
+    exec python3 "$APPDIR/usr/share/anonvoid/main.py" "$@"
+else
+    echo "[HATA] AnonVoid çalıştırılabilir dosyası AppDir içinde bulunamadı!" >&2
+    exit 1
+fi

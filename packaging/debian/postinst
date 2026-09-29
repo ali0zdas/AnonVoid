@@ -1,0 +1,49 @@
+#!/bin/sh
+# ==============================================================================
+# AnonVoid — Debian Kurulum Sonrası Betiği (postinst)
+# ==============================================================================
+
+set -e
+
+case "$1" in
+    configure)
+        # anonvoid sistem grubu yoksa ekle
+        if ! getent group anonvoid >/dev/null 2>&1; then
+            if command -v addgroup >/dev/null 2>&1; then
+                addgroup --system anonvoid >/dev/null 2>&1
+            else
+                groupadd -r anonvoid >/dev/null 2>&1
+            fi
+            echo "[+] 'anonvoid' sistem grubu oluşturuldu."
+        fi
+
+        # Dosya sahipliği ve izinlerini düzenle
+        if [ -d /opt/anonvoid ]; then
+            chown -R root:anonvoid /opt/anonvoid
+            find /opt/anonvoid -type d -exec chmod 0755 {} +
+            find /opt/anonvoid -type f -exec chmod 0644 {} +
+            chmod 0755 /opt/anonvoid/main.py
+        fi
+
+        # Systemd servisini yeniden tara ve etkinleştir
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+            systemctl enable anonvoid.service >/dev/null 2>&1 || true
+        fi
+
+        # Masaüstü MIME ve kısayol veritabanını güncelle
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst çağrıldı ancak argüman tanınmadı: $1" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

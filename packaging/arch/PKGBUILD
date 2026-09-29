@@ -1,0 +1,71 @@
+# Maintainer: AnonVoid Team <support@anonvoid.local>
+# Contributor: ali0zdas
+pkgname=anonvoid
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="AnonVoid — Linux Digital Footprint & Anti-Forensics Cleaner (Zero Self-Footprint, Tor, DNSCrypt, nftables)"
+arch=('any')
+url="https://github.com/ali0zdas/anonvoid"
+license=('GPL-3.0-or-later')
+depends=(
+    'python'
+    'python-pyqt6'
+    'tor'
+    'dnscrypt-proxy'
+    'nftables'
+    'util-linux'
+)
+optdepends=(
+    'nuitka: C++ ikili derleme desteği'
+    'fstrim: SSD TRIM desteği'
+)
+backup=()
+install=anonvoid.install
+source=()
+sha256sums=()
+
+package() {
+    cd "${srcdir}/.." || exit 1
+
+    local install_dir="${pkgdir}/opt/anonvoid"
+    mkdir -p "${install_dir}"
+    mkdir -p "${pkgdir}/usr/bin"
+    mkdir -p "${pkgdir}/usr/lib/systemd/system"
+    mkdir -p "${pkgdir}/usr/share/applications"
+    mkdir -p "${pkgdir}/usr/share/icons/hicolor/scalable/apps"
+
+    # Kod tabanını /opt/anonvoid altına kopyala
+    cp -r core gui main.py "${install_dir}/"
+
+    # Bytecode temizliği (Zero-footprint kuralı)
+    find "${install_dir}" -name "*.pyc" -delete 2>/dev/null || true
+    find "${install_dir}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+    # Dosya izinleri
+    find "${install_dir}" -type d -exec chmod 0755 {} +
+    find "${install_dir}" -type f -exec chmod 0644 {} +
+    chmod 0755 "${install_dir}/main.py"
+
+    # Çalıştırıcı wrapper (/usr/bin/anonvoid)
+    cat << 'EOF' > "${pkgdir}/usr/bin/anonvoid"
+#!/bin/sh
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 /opt/anonvoid/main.py "$@"
+EOF
+    chmod 0755 "${pkgdir}/usr/bin/anonvoid"
+    ln -sf anonvoid "${pkgdir}/usr/bin/fp-cleaner"
+
+    # Systemd servis ünitesi
+    local svc_file="packaging/systemd/anonvoid.service"
+    [ ! -f "$svc_file" ] && svc_file="packaging/systemd/fp-cleaner.service"
+    install -Dm644 "$svc_file" "${pkgdir}/usr/lib/systemd/system/anonvoid.service"
+
+    # Masaüstü entegrasyonu ve simge
+    local desk_file="packaging/desktop/anonvoid.desktop"
+    [ ! -f "$desk_file" ] && desk_file="packaging/desktop/fp-cleaner.desktop"
+    install -Dm644 "$desk_file" "${pkgdir}/usr/share/applications/anonvoid.desktop"
+
+    local svg_file="packaging/desktop/anonvoid.svg"
+    [ ! -f "$svg_file" ] && svg_file="packaging/desktop/fp-cleaner.svg"
+    install -Dm644 "$svg_file" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
+}

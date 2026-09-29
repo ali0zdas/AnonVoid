@@ -1,0 +1,92 @@
+# ==============================================================================
+# AnonVoid — .gitignore (Git Yoksayma Kuralları)
+# ==============================================================================
+
+# --- Dahili Taslaklar ve Özel Proje Belgeleri (Internal Docs & Memory) ---
+docs/
+AGENTS.md
+TASK_MEMORY.md
+KNOWN_ISSUES.md
+fp cleaner.md
+fp cleaner 2.md
+*.draft.md
+*scratch*
+
+# --- Python ve Derleme Yapıntıları (Zero Self-Footprint) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyo
+
+# --- Sanal Ortamlar (Virtual Environments) ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Paketleme, Dağıtım ve Derleyici Çıktıları ---
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- İkili Paket Çıktıları (Binary Packages) ---
+*.deb
+*.AppImage
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.rpm
+
+# --- Nuitka Derleyici Geçici Dizinleri ---
+*.build/
+*.dist/
+*.onefile-build/
+
+# --- Test, Kapsam ve Lint Önbellekleri ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# --- Çalışma Zamanı, Soketler ve Günlük Dosyaları ---
+*.sock
+*.pid
+*.log
+/run/
+daemon.sock
+anonvoid.sock
+
+# --- Editör ve İşletim Sistemi Yapıntıları ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Yapay Zeka ve Yerel Geçici Dizinler ---
+.gemini/
+scratch/

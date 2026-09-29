@@ -1,0 +1,50 @@
+# AnonVoid Arch Linux Paket Kurulum Kancaları
+
+post_install() {
+    if ! getent group anonvoid >/dev/null 2>&1; then
+        groupadd -r anonvoid
+        echo "==> 'anonvoid' sistem grubu oluşturuldu."
+    fi
+
+    if [ -d /opt/anonvoid ]; then
+        chown -R root:anonvoid /opt/anonvoid
+    fi
+
+    echo "===================================================================="
+    echo "  🛡️  ANONVOID KURULUMU TAMAMLANDI"
+    echo "===================================================================="
+    echo "  1. Kullanıcınızı gruba ekleyin:"
+    echo "     sudo usermod -aG anonvoid \$USER"
+    echo "  2. Root daemon servisini başlatın:"
+    echo "     sudo systemctl enable --now anonvoid.service"
+    echo "  3. Yeni grup izinlerinin geçerli olması için oturumu yeniden açın."
+    echo "===================================================================="
+
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q
+    fi
+}
+
+post_upgrade() {
+    post_install
+    if systemctl is-active --quiet anonvoid.service; then
+        systemctl restart anonvoid.service
+        echo "==> anonvoid.service yeniden başlatıldı."
+    fi
+}
+
+pre_remove() {
+    if systemctl is-active --quiet anonvoid.service; then
+        systemctl stop anonvoid.service
+    fi
+    if systemctl is-enabled --quiet anonvoid.service; then
+        systemctl disable anonvoid.service
+    fi
+}
+
+post_remove() {
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q
+    fi
+    echo "==> AnonVoid kaldırıldı. 'anonvoid' grubu korunmuştur."
+}

@@ -1,0 +1,18 @@
+Package: anonvoid
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: AnonVoid Team <support@anonvoid.local>
+Depends: python3 (>= 3.10), python3-pyqt6, tor, dnscrypt-proxy, nftables, util-linux
+Recommends: fstrim
+Suggests: nuitka
+Provides: fp-cleaner
+Replaces: fp-cleaner
+Installed-Size: 1024
+Homepage: https://github.com/ali0zdas/anonvoid
+Description: AnonVoid - Linux Digital Footprint & Anti-Forensics Cleaner
+ AnonVoid, Linux isletim sistemlerinde arkada sifir adli iz (zero self-footprint)
+ birakarak sistem gunluklerini, kabuk gecmislerini, tarayici onbelleklerini, RAM ve swap
+ alanlarini temizleyen ve tum ag trafigini Tor & DNSCrypt uzerinden nftables ile yonlendiren
+ guvenlik ve gizlilik merkezidir.
