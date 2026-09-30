@@ -1,0 +1,99 @@
+#!/bin/sh
+# ==============================================================================
+# AnonVoid — çalıştırıcı (launcher) betiği
+# ==============================================================================
+# Kurulumda bu şablon @PREFIX@ yer tutucusu gerçek uygulama diziniyle
+# değiştirilir (bkz. install.sh ve packaging/launcher/install-user.sh).
+#
+# Kullanım:
+#   anonvoid              → GUI'yi normal kullanıcı olarak başlatır
+#   anonvoid --wipe       → anlık adli temizlik
+#   anonvoid --leak-test  → canlı sızıntı testi
+#   anonvoid --panic      → acil durum kill-switch
+#   anonvoid --service    → root IPC daemon (yalnızca systemd servisi çalıştırır)
+# ==============================================================================
+
+ANONVOID_HOME="@PREFIX@"
+
+# Geliştirme / taşınabilir kurulumlar için dizin geçersiz kılması
+if [ -n "${ANONVOID_HOME_OVERRIDE:-}" ] && [ -d "${ANONVOID_HOME_OVERRIDE}" ]; then
+    ANONVOID_HOME="${ANONVOID_HOME_OVERRIDE}"
+fi
+
+# Uygulama dizinini doğrula (taşınabilir AppImage veya taşınmış kurulum durumu)
+if [ ! -f "${ANONVOID_HOME}/main.py" ]; then
+    echo "AnonVoid: uygulama bulunamadı: ${ANONVOID_HOME}/main.py" >&2
+    echo "ANONVOID_HOME_ORTAM değişkeniyle dizini belirtebilirsiniz." >&2
+    exit 1
+fi
+
+# .pyc dosyası üretimini engelle (kurulum dizini root:anonvoid ve salt-okunur olabilir)
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE
+
+# Python3 yorumlayıcısını tespit et
+PYTHON="${ANONVOID_PYTHON:-}"
+if [ -z "${PYTHON}" ]; then
+    for candidate in python3 python3.14 python3.13 python3.12 python3.11 python; do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+            PYTHON="${candidate}"
+            break
+        fi
+    done
+fi
+
+if [ -z "${PYTHON}" ]; then
+    echo "AnonVoid: python3 yorumlayıcısı bulunamadı." >&2
+    exit 127
+fi
+
+# --service dışındaki tüm modlar GUI gerektirir; PyQt6 önceden doğrulanır
+NEEDS_GUI=1
+for arg in "$@"; do
+    if [ "${arg}" = "--service" ]; then
+        NEEDS_GUI=0
+        break
+    fi
+done
+
+if [ "${NEEDS_GUI}" -eq 1 ]; then
+    if ! "${PYTHON}" -c "import PyQt6.QtWidgets" >/dev/null 2>&1; then
+        echo "AnonVoid: PyQt6 kurulu değil." >&2
+        echo "  Debian/Ubuntu/Kali : sudo apt install python3-pyqt6" >&2
+        echo "  Arch               : sudo pacman -S python-pyqt6" >&2
+        echo "  Fedora             : sudo dnf install python3-pyqt6" >&2
+        echo "  openSUSE           : sudo zypper install python3-qt6" >&2
+        exit 1
+    fi
+fi
+
+# Root yetki kontrolü — GUI asla root olarak çalıştırılmaz.
+# Qt/Wayland root pencerelerini reddeder, ayrıca root tarafından oluşturulan
+# dosyalar kullanıcının sahipliğine geçemez. Yetkili işler daemon'a gider.
+IS_ROOT=0
+if [ "$(id -u)" -eq 0 ]; then
+    IS_ROOT=1
+fi
+
+if [ "${NEEDS_GUI}" -eq 1 ] && [ "${IS_ROOT}" -eq 1 ]; then
+    echo "AnonVoid: GUI root olarak başlatılamaz." >&2
+    echo "  Qt/Wayland root pencerelerini engeller ve oluşturulan dosyalar" >&2
+    echo "  sahiplik sorunlarına yol açar. Yetkili işler root daemon üzerinden" >&2
+    echo "  yürütülür; arayüz normal kullanıcı olarak çalışır." >&2
+    echo ""
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        echo "Bunun yerine deneyin:  sudo -u ${SUDO_USER} anonvoid $*" >&2
+    else
+        echo "Bunun yerine deneyin:  anonvoid" >&2
+    fi
+    exit 1
+fi
+
+if [ "${NEEDS_GUI}" -eq 0 ] && [ "${IS_ROOT}" -eq 0 ]; then
+    echo "AnonVoid: --service root yetkisiyle çalıştırılmalıdır." >&2
+    echo "Genellikle systemd servisi tarafından otomatik başlatılır:" >&2
+    echo "  sudo systemctl start anonvoid" >&2
+    exit 1
+fi
+
+exec "${PYTHON}" "${ANONVOID_HOME}/main.py" "$@"

@@ -14,6 +14,9 @@ GROUP_NAME="anonvoid"
 DESKTOP_FILE="/usr/share/applications/anonvoid.desktop"
 ICON_FILE="/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
 
+# Betiğin bulunduğu dizin (şablon ve paket dosyalarını bulmak için gerekli)
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # Renkler
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -151,7 +154,19 @@ install_files() {
     echo -e "${BLUE}[BİLGİ] Uygulama dosyaları ${INSTALL_DIR} dizinine kopyalanıyor...${NC}"
 
     mkdir -p "$INSTALL_DIR"
-    cp -r core gui docs tests main.py "$INSTALL_DIR/"
+
+    # Python bytecode önbelleğini asla kopyalama (AGENTS.md: sıfır kendi izi)
+    find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    find . -name '*.pyc' -type f -delete 2>/dev/null || true
+
+    # packaging/ de kopyalanır: çalıştırıcı şablonu ve systemd ünitesi
+    # kurulum sonrasında /opt/anonvoid altından da erişilebilir olmalıdır.
+    cp -r core gui docs tests packaging main.py "$INSTALL_DIR/" 2>/dev/null \
+        || cp -r core gui docs tests main.py "$INSTALL_DIR/"
+
+    # Kopyalama sonrasıda bytecode kalıntısı olmadığını doğrula
+    find "$INSTALL_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$INSTALL_DIR" -name '*.pyc' -type f -delete 2>/dev/null || true
 
     # Dosya sahipliğini ve izinlerini sertleştir
     chown -R root:"$GROUP_NAME" "$INSTALL_DIR"
@@ -160,14 +175,28 @@ install_files() {
     chmod 0755 "$INSTALL_DIR/main.py"
 
     # /usr/local/bin/anonvoid çalıştırıcı wrapper scripti oluştur
-    cat << 'EOF' > "$BIN_LINK"
-#!/bin/sh
-export PYTHONDONTWRITEBYTECODE=1
-exec python3 /opt/anonvoid/main.py "$@"
-EOF
+    # Ortak şablon kullanılır; böylece root koruması ve bağımlılık kontrolleri
+    # hem sistem geneli hem kullanıcı düzeyi kurulumda birebir aynıdır.
+    LAUNCHER_TEMPLATE=""
+    for candidate in \
+        "$PWD/packaging/launcher/anonvoid" \
+        "$INSTALL_DIR/packaging/launcher/anonvoid" \
+        "$SCRIPT_DIR/packaging/launcher/anonvoid"; do
+        if [ -f "$candidate" ]; then
+            LAUNCHER_TEMPLATE="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$LAUNCHER_TEMPLATE" ]; then
+        echo -e "${RED}[HATA] packaging/launcher/anonvoid şablonu bulunamadı.${NC}"
+        exit 1
+    fi
+
+    sed "s|@PREFIX@|${INSTALL_DIR}|g" "$LAUNCHER_TEMPLATE" > "$BIN_LINK"
     chmod 0755 "$BIN_LINK"
     ln -sf "$BIN_LINK" "$LEGACY_BIN_LINK" 2>/dev/null || true
-    echo -e "${GREEN}[+] Çalıştırıcı bağlantısı oluşturuldu: ${BIN_LINK}${NC}"
+    echo -e "${GREEN}[+] Çalıştırıcı oluşturuldu: ${BIN_LINK}${NC}"
 }
 
 # ------------------------------------------------------------------------------
