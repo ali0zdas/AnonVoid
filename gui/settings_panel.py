@@ -37,7 +37,8 @@ except ImportError:
     pass
 
 from core.config import DEFAULT_CONFIG, safe_load_config, safe_save_config
-from gui.themes import get_available_themes
+from gui.themes import current_palette, get_available_themes
+from gui.widgets import guarded_style_sheet
 
 logger = logging.getLogger("AnonVoidSettings")
 
@@ -57,13 +58,12 @@ class SettingsPanel(QWidget):
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(24, 20, 24, 22)
         main_layout.setSpacing(16)
 
-        # Başlık
-        title = QLabel("Yapılandırma ve Sistem Ayarları", self)
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
-        main_layout.addWidget(title)
+        section = QLabel("YAPILANDIRMA", self)
+        section.setObjectName("sectionTitle")
+        main_layout.addWidget(section)
 
         # Kaydırılabilir Alan
         scroll = QScrollArea(self)
@@ -76,7 +76,6 @@ class SettingsPanel(QWidget):
 
         # 1. Ağ Omurgası Ayarları
         net_group = QGroupBox("Ağ Omurgası ve Güvenlik Duvarı Ayarları", container)
-        net_group.setStyleSheet("font-weight: bold; font-size: 13px;")
         net_form = QFormLayout(net_group)
         net_form.setContentsMargins(16, 16, 16, 16)
         net_form.setSpacing(10)
@@ -122,17 +121,13 @@ class SettingsPanel(QWidget):
 
         # 2. Görünüm ve Genel Tercihler
         app_group = QGroupBox("Görünüm ve Uygulama Davranışı", container)
-        app_group.setStyleSheet("font-weight: bold; font-size: 13px;")
         app_form = QFormLayout(app_group)
         app_form.setContentsMargins(16, 16, 16, 16)
         app_form.setSpacing(10)
 
         self.combo_theme = QComboBox(app_group)
-        self.combo_theme.addItem("OLED (Saf Siyah)", "oled")
-        self.combo_theme.addItem("Circuit (Siber PCB)", "circuit")
-        self.combo_theme.addItem("Light (Modern Açık)", "light")
-        self.combo_theme.addItem("Binary (Terminal Yeşili)", "binary")
-        self.combo_theme.addItem("Pixel (Cyberpunk Synthwave)", "pixel")
+        for theme_key, theme_name in get_available_themes().items():
+            self.combo_theme.addItem(theme_name, theme_key)
         self.combo_theme.currentIndexChanged.connect(self._on_theme_selected)
         app_form.addRow("Görsel Tema Seçimi:", self.combo_theme)
 
@@ -153,13 +148,12 @@ class SettingsPanel(QWidget):
         btn_bar.addStretch()
 
         self.status_save_label = QLabel("", self)
-        self.status_save_label.setStyleSheet("color: #00ff88; font-weight: bold;")
         btn_bar.addWidget(self.status_save_label)
 
-        self.btn_save = QPushButton("💾 AYARLARI KAYDET", self)
+        self.btn_save = QPushButton("AYARLARI KAYDET", self)
         self.btn_save.setObjectName("primaryButton")
         self.btn_save.setMinimumHeight(40)
-        self.btn_save.setMinimumWidth(180)
+        self.btn_save.setMinimumWidth(170)
         self.btn_save.clicked.connect(self.save_settings)
         btn_bar.addWidget(self.btn_save)
 
@@ -220,8 +214,16 @@ class SettingsPanel(QWidget):
         try:
             safe_save_config(self.config_path, updated_config)
             self.config_data = safe_load_config(self.config_path)
-            self.status_save_label.setText("Ayarlar başarıyla kaydedildi!")
+            self._set_save_status("Ayarlar başarıyla kaydedildi!", "success")
             self.config_saved.emit(self.config_data)
         except Exception as err:
-            self.status_save_label.setStyleSheet("color: #ff3366;")
-            self.status_save_label.setText(f"Kayıt hatası: {err}")
+            self._set_save_status(f"Kayıt hatası: {err}", "danger")
+
+    def _set_save_status(self, text: str, token: str) -> None:
+        """Kaydetme durumunu temadan alınan renkle gösterir."""
+        pal = current_palette()
+        self.status_save_label.setText(text)
+        guarded_style_sheet(
+            self.status_save_label,
+            f"color: {pal.get(token, pal['text_secondary'])}; font-weight: 600; background: transparent;",
+        )

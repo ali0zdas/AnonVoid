@@ -1,22 +1,26 @@
-"""AnonVoid - Canlı Adli Ağ Sızıntı Test Paneli (Leak Test Dashboard).
+"""AnonVoid - Canlı Adli Ağ Sızıntı Test Paneli (Leak Test).
 
-Bu modül; kullanıcının tek bir tıklamayla Tor Exit IP'sini, DNS sızıntılarını,
-IPv6 drop durumunu ve WebRTC STUN UDP kaçaklarını denetleyebileceği görsel test ekranıdır.
+Bu modül; kullanıcının tek tıklamayla Tor çıkış IP'sini, DNS sızıntılarını,
+IPv6 kaçağını ve WebRTC STUN açıklarını denetleyebileceği görsel test ekranıdır.
+
+Tüm renkler `gui.themes` paletinden gelir; panel hiçbir rengi satır içi
+sabit kodlamaz.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Dict, Optional
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
 sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -25,6 +29,48 @@ from PyQt6.QtWidgets import (
 )
 
 from core.daemon_client import AsyncDaemonWorker, DaemonClient
+from gui.themes import current_palette, register_theme_listener
+from gui.widgets import (
+    GLYPH_DNS,
+    GLYPH_LEAK,
+    GLYPH_MAC,
+    GLYPH_TOR,
+    GlyphChip,
+    guarded_style_sheet,
+)
+
+
+class _StatusText(QLabel):
+    """Temadan renk alan, kendini yeniden boyayan durum metni."""
+
+    def __init__(self, initial: str, token: str = "text_muted", parent: Optional[QWidget] = None) -> None:
+        super().__init__(initial, parent)
+        self.setObjectName("cardCaption")
+        self.setWordWrap(True)
+        self._token = token
+        register_theme_listener(self._on_theme_changed)
+        self._apply()
+
+    def _on_theme_changed(self) -> None:
+        self._apply()
+
+    def set_status(self, text: str, token: str) -> None:
+        """Metni ve anlam rengini günceller."""
+        self.setText(text)
+        self._token = token
+        self._apply()
+
+    def _apply(self) -> None:
+        pal = current_palette()
+        guarded_style_sheet(
+            self,
+            f"color: {pal.get(self._token, pal['text_muted'])};"
+            " font-size: 12px; font-weight: 600; background: transparent;",
+        )
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        self._apply()
+        super().changeEvent(event)
 
 
 class LeakPanel(QWidget):
@@ -35,108 +81,95 @@ class LeakPanel(QWidget):
         self.client = client
         self._init_ui()
 
+    # ------------------------------------------------------------------
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(24, 20, 24, 22)
         main_layout.setSpacing(16)
 
-        # Başlık ve Açıklama
-        header_layout = QVBoxLayout()
-        header_layout.setSpacing(4)
-        title = QLabel("Canlı Adli Ağ Sızıntı Test Paketi (Leak Test Suite)", self)
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
-        header_layout.addWidget(title)
+        # Genel durum kartı
+        summary = QFrame(self)
+        summary.setProperty("class", "cardFrame")
+        summary_layout = QHBoxLayout(summary)
+        summary_layout.setContentsMargins(16, 14, 14, 14)
+        summary_layout.setSpacing(12)
 
-        desc = QLabel(
-            "Ağ trafiğinizin Tor, DNSCrypt ve IPv6 filtrelerinden dışarı sızıp sızmadığını gerçek zamanlı test edin.",
-            self,
-        )
-        desc.setStyleSheet("font-size: 12px; color: #888888;")
-        header_layout.addWidget(desc)
-        main_layout.addLayout(header_layout)
+        self.summary_label = _StatusText("Test henüz çalıştırılmadı.", "text_muted")
+        summary_layout.addWidget(self.summary_label, stretch=1)
 
-        # Genel Durum Kartı
-        self.summary_box = QFrame(self)
-        self.summary_box.setProperty("class", "cardFrame")
-        self.summary_box.setMinimumHeight(70)
-        summary_layout = QHBoxLayout(self.summary_box)
-
-        self.summary_label = QLabel("Test Bekleniyor: Sonuçları görmek için testi çalıştırın.", self)
-        self.summary_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #888888;")
-        summary_layout.addWidget(self.summary_label)
-
-        summary_layout.addStretch()
-
-        self.btn_run_test = QPushButton("🔍 SIZINTI TESTİNİ ÇALIŞTIR", self)
+        self.btn_run_test = QPushButton("TESTİ ÇALIŞTIR", summary)
         self.btn_run_test.setObjectName("primaryButton")
         self.btn_run_test.setMinimumHeight(38)
+        self.btn_run_test.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_run_test.clicked.connect(self.run_test)
         summary_layout.addWidget(self.btn_run_test)
+        main_layout.addWidget(summary)
 
-        main_layout.addWidget(self.summary_box)
+        section = QLabel("GÜVENLİK GÖSTERGELERİ", self)
+        section.setObjectName("sectionTitle")
+        main_layout.addWidget(section)
 
-        # 4 Ana Test Kartı (Grid)
-        grid_group = QGroupBox("Adli Güvenlik ve Sızıntı Göstergeleri", self)
-        grid_group.setStyleSheet("font-weight: bold; font-size: 13px;")
-        grid_layout = QGridLayout(grid_group)
-        grid_layout.setContentsMargins(16, 16, 16, 16)
-        grid_layout.setSpacing(14)
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        self.lbl_tor = self._create_indicator("Tor Çıkış IP Doğrulaması", GLYPH_TOR, "Henüz test edilmedi")
+        self.lbl_dns = self._create_indicator("DNS Sızıntı Koruması", GLYPH_DNS, "Henüz test edilmedi")
+        self.lbl_ipv6 = self._create_indicator("IPv6 Sızıntı Kalkanı", GLYPH_MAC, "Henüz test edilmedi")
+        self.lbl_webrtc = self._create_indicator("WebRTC STUN Kaçağı", GLYPH_LEAK, "Henüz test edilmedi")
+        grid.addWidget(self.lbl_tor, 0, 0)
+        grid.addWidget(self.lbl_dns, 0, 1)
+        grid.addWidget(self.lbl_ipv6, 1, 0)
+        grid.addWidget(self.lbl_webrtc, 1, 1)
+        main_layout.addLayout(grid)
 
-        # 1. Tor Exit IP Kartı
-        self.card_tor = self._create_indicator_card("🧅 Tor Çıkış IP Doğrulaması", "IP: Henüz test edilmedi")
-        grid_layout.addWidget(self.card_tor, 0, 0)
+        section2 = QLabel("SİSTEM KİMLİĞİ", self)
+        section2.setObjectName("sectionTitle")
+        main_layout.addWidget(section2)
 
-        # 2. DNS Sızıntı Kartı
-        self.card_dns = self._create_indicator_card("🌐 DNS Sızıntı Koruması", "DNS: Henüz test edilmedi")
-        grid_layout.addWidget(self.card_dns, 0, 1)
-
-        # 3. IPv6 Kalkan Kartı
-        self.card_ipv6 = self._create_indicator_card("🛡️ IPv6 Sızıntı Kalkanı (Drop)", "IPv6: Henüz test edilmedi")
-        grid_layout.addWidget(self.card_ipv6, 1, 0)
-
-        # 4. WebRTC STUN Kaçak Kartı
-        self.card_webrtc = self._create_indicator_card("📡 WebRTC UDP STUN Sızıntısı", "WebRTC: Henüz test edilmedi")
-        grid_layout.addWidget(self.card_webrtc, 1, 1)
-
-        main_layout.addWidget(grid_group)
-
-        # Sistem Kimliği ve Parmak İzi Kartı
-        id_group = QGroupBox("Sistem Kimliği ve Saat Dilimi (Timezone) İfşası", self)
-        id_group.setStyleSheet("font-weight: bold; font-size: 13px;")
-        id_layout = QVBoxLayout(id_group)
-        id_layout.setContentsMargins(16, 16, 16, 16)
-
-        self.label_identity = QLabel("Makine Adı (Hostname) ve Yerel Saat Dilimi bilgisi test edilmedi.", self)
-        self.label_identity.setStyleSheet("font-size: 12px; color: #888888;")
+        identity = QFrame(self)
+        identity.setProperty("class", "insetFrame")
+        identity_layout = QVBoxLayout(identity)
+        identity_layout.setContentsMargins(14, 12, 14, 12)
+        self.label_identity = QLabel(
+            "Makine adı ve yerel saat dilimi bilgisi henüz test edilmedi.", identity
+        )
+        self.label_identity.setObjectName("cardCaption")
         self.label_identity.setWordWrap(True)
-        id_layout.addWidget(self.label_identity)
+        identity_layout.addWidget(self.label_identity)
+        main_layout.addWidget(identity)
 
-        main_layout.addWidget(id_group)
-        main_layout.addStretch()
+        main_layout.addStretch(1)
 
-    def _create_indicator_card(self, title: str, initial_val: str) -> QFrame:
-        """Sızıntı gösterge kartı oluşturur."""
+    def _create_indicator(self, title: str, glyph: str, initial: str) -> QFrame:
+        """Başlık + glif + durum metninden oluşan gösterge kartı üretir."""
         frame = QFrame(self)
         frame.setProperty("class", "cardFrame")
+        frame.setMinimumHeight(104)
+
         layout = QVBoxLayout(frame)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
 
+        head = QHBoxLayout()
+        head.setSpacing(9)
+        chip = GlyphChip(glyph, "text_muted", 26, frame)
+        head.addWidget(chip)
         title_lbl = QLabel(title, frame)
-        title_lbl.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
-        layout.addWidget(title_lbl)
+        title_lbl.setObjectName("cardTitle")
+        title_lbl.setWordWrap(True)
+        head.addWidget(title_lbl, stretch=1)
+        layout.addLayout(head)
 
-        val_lbl = QLabel(initial_val, frame)
-        val_lbl.setObjectName("val_label")
-        val_lbl.setStyleSheet("font-size: 12px; color: #888888;")
-        layout.addWidget(val_lbl)
-
+        status = _StatusText(initial, frame)
+        status.setObjectName("val_label")
+        layout.addWidget(status)
+        frame.status_label = status
         return frame
 
+    # ------------------------------------------------------------------
     def run_test(self) -> None:
-        """Sızıntı testini asenkron olarak yürütür."""
+        """Sızıntı testini arayüzü kilitlemeden yürütür."""
         self.btn_run_test.setEnabled(False)
-        self.summary_label.setText("Sızıntı testleri yürütülüyor, lütfen bekleyin...")
-        self.summary_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #00d4ff;")
+        self.summary_label.set_status("Sızıntı testleri yürütülüyor, lütfen bekleyin…", "info")
 
         def _on_success(data: Dict[str, Any]) -> None:
             self.btn_run_test.setEnabled(True)
@@ -144,71 +177,58 @@ class LeakPanel(QWidget):
 
         def _on_error(err_msg: str) -> None:
             self.btn_run_test.setEnabled(True)
-            self.summary_label.setText(f"Test Başarısız: {err_msg}")
-            self.summary_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ff3366;")
+            self.summary_label.set_status(f"Test başarısız: {err_msg}", "danger")
 
-        worker = AsyncDaemonWorker(
+        AsyncDaemonWorker(
             client=self.client,
             action="leak_test",
             timeout=30.0,
             on_success=_on_success,
             on_error=_on_error,
-        )
-        worker.start()
+        ).start()
 
     def _update_results(self, data: Dict[str, Any]) -> None:
-        """Dönen test raporunu arayüz kartlarına işler."""
-        is_anon = data.get("is_fully_anonymous", False)
-
-        # Genel Özet
+        """Dönen test raporunu gösterge kartlarına işler."""
+        is_anon = bool(data.get("is_fully_anonymous", False))
         if is_anon:
-            self.summary_label.setText("🛡️ %100 ANONİM VE GÜVENLİ: Hiçbir sızıntı tespit edilmedi.")
-            self.summary_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #00ff88;")
+            self.summary_label.set_status("Tam anonimlik sağlandı: hiçbir sızıntı tespit edilmedi.", "success")
         else:
-            self.summary_label.setText("⚠️ DİKKAT: Bazı testler koruma altında olmadığınızı gösteriyor!")
-            self.summary_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ffaa00;")
+            self.summary_label.set_status(
+                "Dikkat: bazı göstergeler koruma altında olmadığınızı gösteriyor.", "warning"
+            )
 
-        # Tor Kartı
         tor = data.get("tor", {})
-        tor_lbl = self.card_tor.findChild(QLabel, "val_label")
-        if tor_lbl:
-            ip = tor.get("ip", "Bilinmiyor")
-            is_tor = tor.get("is_tor", False)
-            color = "#00ff88" if is_tor else "#ffaa00"
-            status_txt = "Tor Exit Node (Güvenli)" if is_tor else "Tor Dışı IP (Açık)"
-            tor_lbl.setText(f"IP: {ip} ({status_txt})")
-            tor_lbl.setStyleSheet(f"font-size: 12px; color: {color}; font-weight: bold;")
+        is_tor = bool(tor.get("is_tor", False))
+        self.lbl_tor.status_label.set_status(
+            f"{tor.get('ip', 'Bilinmiyor')} — {'Tor çıkış düğümü' if is_tor else 'Tor dışı, gerçek IP açıkta'}",
+            "success" if is_tor else "danger",
+        )
 
-        # DNS Kartı
         dns = data.get("dns", {})
-        dns_lbl = self.card_dns.findChild(QLabel, "val_label")
-        if dns_lbl:
-            dns_ok = dns.get("tor_dns_responsive", False)
-            color = "#00ff88" if dns_ok else "#ff3366"
-            dns_lbl.setText(f"DNS Yanıtı: {dns.get('resolved_ip', 'Bilinmiyor')} (Tor DNSPort Aktif)")
-            dns_lbl.setStyleSheet(f"font-size: 12px; color: {color}; font-weight: bold;")
+        dns_ok = bool(dns.get("tor_dns_responsive", False))
+        self.lbl_dns.status_label.set_status(
+            f"{dns.get('resolved_ip', 'Bilinmiyor')} — Tor DNSPort yanıt veriyor"
+            if dns_ok
+            else "Tor DNSPort yanıt vermiyor",
+            "success" if dns_ok else "danger",
+        )
 
-        # IPv6 Kartı
         ipv6 = data.get("ipv6", {})
-        ipv6_lbl = self.card_ipv6.findChild(QLabel, "val_label")
-        if ipv6_lbl:
-            leak = ipv6.get("leak_detected", False)
-            color = "#ff3366" if leak else "#00ff88"
-            ipv6_lbl.setText(ipv6.get("message", "Test Edildi"))
-            ipv6_lbl.setStyleSheet(f"font-size: 12px; color: {color}; font-weight: bold;")
+        ipv6_leak = bool(ipv6.get("leak_detected", False))
+        self.lbl_ipv6.status_label.set_status(
+            ipv6.get("message", "Test edildi"), "danger" if ipv6_leak else "success"
+        )
 
-        # WebRTC Kartı
         webrtc = data.get("webrtc", {})
-        webrtc_lbl = self.card_webrtc.findChild(QLabel, "val_label")
-        if webrtc_lbl:
-            leak = webrtc.get("leak_detected", False)
-            color = "#ff3366" if leak else "#00ff88"
-            webrtc_lbl.setText(webrtc.get("message", "Test Edildi"))
-            webrtc_lbl.setStyleSheet(f"font-size: 12px; color: {color}; font-weight: bold;")
+        webrtc_leak = bool(webrtc.get("leak_detected", False))
+        self.lbl_webrtc.status_label.set_status(
+            webrtc.get("message", "Test edildi"), "danger" if webrtc_leak else "success"
+        )
 
-        # Sistem Kimliği
         ident = data.get("system_identity", {})
-        h_name = ident.get("hostname", "Bilinmiyor")
-        tz = ident.get("timezone", "Bilinmiyor")
-        warn = ident.get("warning", "")
-        self.label_identity.setText(f"Makine Adı (Hostname): {h_name} | Saat Dilimi: {tz}\n{warn}")
+        warning = ident.get("warning", "")
+        self.label_identity.setText(
+            f"Makine adı: {ident.get('hostname', 'Bilinmiyor')}    ·    "
+            f"Saat dilimi: {ident.get('timezone', 'Bilinmiyor')}"
+            + (f"\n{warning}" if warning else "")
+        )
