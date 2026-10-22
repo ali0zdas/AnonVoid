@@ -39,10 +39,10 @@ find "$APP_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || tru
 # 3. İkon ve Masaüstü Kısayolu Entegrasyonu
 echo "[*] Masaüstü ve ikon metaverileri yerleştiriliyor..."
 DESKTOP_SRC="$PROJECT_ROOT/packaging/desktop/anonvoid.desktop"
-[ ! -f "$DESKTOP_SRC" ] && DESKTOP_SRC="$PROJECT_ROOT/packaging/desktop/fp-cleaner.desktop"
-
 SVG_SRC="$PROJECT_ROOT/packaging/desktop/anonvoid.svg"
-[ ! -f "$SVG_SRC" ] && SVG_SRC="$PROJECT_ROOT/packaging/desktop/fp-cleaner.svg"
+
+[ ! -f "$DESKTOP_SRC" ] && { echo "[HATA] $DESKTOP_SRC bulunamadı." >&2; exit 1; }
+[ ! -f "$SVG_SRC" ] && { echo "[HATA] $SVG_SRC bulunamadı." >&2; exit 1; }
 
 cp "$DESKTOP_SRC" "$APP_DIR/usr/share/applications/anonvoid.desktop"
 cp "$DESKTOP_SRC" "$APP_DIR/anonvoid.desktop"
@@ -58,9 +58,6 @@ chmod +x "$APP_DIR/AppRun"
 if [ -f "$OUTPUT_DIR/anonvoid" ]; then
     echo "[+] Önceden derlenmiş C++ ikilisi tespit edildi, AppDir/usr/bin içine kopyalanıyor..."
     cp "$OUTPUT_DIR/anonvoid" "$APP_DIR/usr/bin/anonvoid"
-    chmod +x "$APP_DIR/usr/bin/anonvoid"
-elif [ -f "$OUTPUT_DIR/fp-cleaner" ]; then
-    cp "$OUTPUT_DIR/fp-cleaner" "$APP_DIR/usr/bin/anonvoid"
     chmod +x "$APP_DIR/usr/bin/anonvoid"
 fi
 

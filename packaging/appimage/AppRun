@@ -24,8 +24,6 @@ export QML2_IMPORT_PATH="$APPDIR/usr/qml:${QML2_IMPORT_PATH:-}"
 # İkili dosya önceliği: Eğer derlenmiş C++ ikilisi varsa onu çalıştır, yoksa Python ile başlat
 if [ -x "$APPDIR/usr/bin/anonvoid" ]; then
     exec "$APPDIR/usr/bin/anonvoid" "$@"
-elif [ -x "$APPDIR/usr/bin/fp-cleaner" ]; then
-    exec "$APPDIR/usr/bin/fp-cleaner" "$@"
 elif [ -f "$APPDIR/usr/share/anonvoid/main.py" ]; then
     exec python3 "$APPDIR/usr/share/anonvoid/main.py" "$@"
 else

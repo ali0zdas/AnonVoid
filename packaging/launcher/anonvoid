@@ -22,14 +22,26 @@ fi
 
 # Uygulama dizinini doğrula (taşınabilir AppImage veya taşınmış kurulum durumu)
 if [ ! -f "${ANONVOID_HOME}/main.py" ]; then
-    echo "AnonVoid: uygulama bulunamadı: ${ANONVOID_HOME}/main.py" >&2
-    echo "ANONVOID_HOME_ORTAM değişkeniyle dizini belirtebilirsiniz." >&2
+echo "AnonVoid: uygulama bulunamadı: ${ANONVOID_HOME}/main.py" >&2
+echo "ANONVOID_HOME_OVERRIDE değişkeniyle dizini belirtebilirsiniz." >&2
+
     exit 1
 fi
 
 # .pyc dosyası üretimini engelle (kurulum dizini root:anonvoid ve salt-okunur olabilir)
 PYTHONDONTWRITEBYTECODE=1
 export PYTHONDONTWRITEBYTECODE
+
+# AnonVoid tüm görsel stilini kendi QSS kurallarıyla uygular; harici platform
+# temasına ihtiyaç duymaz. Bazı masaüstü ortamlarında QT_QPA_PLATFORMTHEME
+# (örn. qt5ct) önceden ayarlıdır ve Qt, bulunmayan "xapp-gtk3-module"
+# eklentisini arayarak her açılışta zararsız ama kafa karıştırıcı bir uyarı
+# basar. Sistem ayarını korumak isteyenler ANONVOID_KEEP_PLATFORM_THEME=1
+# kullanabilir.
+if [ -z "${ANONVOID_KEEP_PLATFORM_THEME:-}" ]; then
+    QT_QPA_PLATFORMTHEME=""
+    export QT_QPA_PLATFORMTHEME
+fi
 
 # Python3 yorumlayıcısını tespit et
 PYTHON="${ANONVOID_PYTHON:-}"

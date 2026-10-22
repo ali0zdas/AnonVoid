@@ -53,19 +53,13 @@ export PYTHONDONTWRITEBYTECODE=1
 exec python3 /opt/anonvoid/main.py "$@"
 EOF
     chmod 0755 "${pkgdir}/usr/bin/anonvoid"
+    # Eski adla (fp-cleaner) çağırma geriye dönük uyumluluk sembolik bağı
     ln -sf anonvoid "${pkgdir}/usr/bin/fp-cleaner"
 
     # Systemd servis ünitesi
-    local svc_file="packaging/systemd/anonvoid.service"
-    [ ! -f "$svc_file" ] && svc_file="packaging/systemd/fp-cleaner.service"
-    install -Dm644 "$svc_file" "${pkgdir}/usr/lib/systemd/system/anonvoid.service"
+    install -Dm644 packaging/systemd/anonvoid.service "${pkgdir}/usr/lib/systemd/system/anonvoid.service"
 
     # Masaüstü entegrasyonu ve simge
-    local desk_file="packaging/desktop/anonvoid.desktop"
-    [ ! -f "$desk_file" ] && desk_file="packaging/desktop/fp-cleaner.desktop"
-    install -Dm644 "$desk_file" "${pkgdir}/usr/share/applications/anonvoid.desktop"
-
-    local svg_file="packaging/desktop/anonvoid.svg"
-    [ ! -f "$svg_file" ] && svg_file="packaging/desktop/fp-cleaner.svg"
-    install -Dm644 "$svg_file" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
+    install -Dm644 packaging/desktop/anonvoid.desktop "${pkgdir}/usr/share/applications/anonvoid.desktop"
+    install -Dm644 packaging/desktop/anonvoid.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
 }

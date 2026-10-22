@@ -27,6 +27,11 @@ RestartSec=3s
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
+# Tor yapılandırması, DNS kilidi ve Tor çerezleri için gerekli YAZMA izinleri.
+# ProtectSystem=full /etc'yi salt-okunur yapar; bu satırlar olmadan daemon
+# /etc/tor/torrc ve /etc/resolv.conf yazamaz, "korumayı başlat" sessizce
+# başarısız olur. Sadece bu iki yol açılır, geri kalanı salt-okunur kalır.
+ReadWritePaths=/etc/tor /etc/resolv.conf
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_CHOWN
 
 [Install]

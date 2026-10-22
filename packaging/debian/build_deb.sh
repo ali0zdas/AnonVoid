@@ -61,22 +61,17 @@ export PYTHONDONTWRITEBYTECODE=1
 exec python3 /opt/anonvoid/main.py "$@"
 EOF
 chmod 0755 "$PKG_ROOT/usr/bin/anonvoid"
+# Eski adla (fp-cleaner) çağırma geriye dönük uyumluluk sembolik bağı
 ln -sf anonvoid "$PKG_ROOT/usr/bin/fp-cleaner"
 
 # 5. Systemd ve Masaüstü Dosyaları
-SVC_SRC="$PROJECT_ROOT/packaging/systemd/anonvoid.service"
-[ ! -f "$SVC_SRC" ] && SVC_SRC="$PROJECT_ROOT/packaging/systemd/fp-cleaner.service"
-cp "$SVC_SRC" "$PKG_ROOT/lib/systemd/system/anonvoid.service"
+cp "$PROJECT_ROOT/packaging/systemd/anonvoid.service" "$PKG_ROOT/lib/systemd/system/anonvoid.service"
 chmod 0644 "$PKG_ROOT/lib/systemd/system/anonvoid.service"
 
-DESK_SRC="$PROJECT_ROOT/packaging/desktop/anonvoid.desktop"
-[ ! -f "$DESK_SRC" ] && DESK_SRC="$PROJECT_ROOT/packaging/desktop/fp-cleaner.desktop"
-cp "$DESK_SRC" "$PKG_ROOT/usr/share/applications/anonvoid.desktop"
+cp "$PROJECT_ROOT/packaging/desktop/anonvoid.desktop" "$PKG_ROOT/usr/share/applications/anonvoid.desktop"
 chmod 0644 "$PKG_ROOT/usr/share/applications/anonvoid.desktop"
 
-SVG_SRC="$PROJECT_ROOT/packaging/desktop/anonvoid.svg"
-[ ! -f "$SVG_SRC" ] && SVG_SRC="$PROJECT_ROOT/packaging/desktop/fp-cleaner.svg"
-cp "$SVG_SRC" "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
+cp "$PROJECT_ROOT/packaging/desktop/anonvoid.svg" "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
 chmod 0644 "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/anonvoid.svg"
 
 # 6. dpkg-deb ile Paketleme

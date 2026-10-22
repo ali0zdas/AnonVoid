@@ -29,6 +29,24 @@ echo -e "${CYAN}================================================================
 echo -e "${CYAN}  🛡️  ANONVOID — KURULUM VE DAĞITIM YÖNETİCİSİ                     ${NC}"
 echo -e "${CYAN}====================================================================${NC}"
 
+# ------------------------------------------------------------------------------
+# Argümanlar (root yetkisi gerekmeden önce çözülür; --help herkes için çalışır)
+# ------------------------------------------------------------------------------
+SKIP_DEPS=0
+for arg in "$@"; do
+    case "${arg}" in
+        --skip-deps) SKIP_DEPS=1 ;;
+        --help|-h)
+            echo "Kullanım: sudo bash install.sh [--skip-deps]"
+            echo "         sudo bash install.sh --uninstall"
+            echo ""
+            echo "  --skip-deps  Paket yöneticisini çalıştırmaz; yalnızca Tor, DNSCrypt,"
+            echo "               nftables ve python3 komutlarının varlığını doğrular."
+            exit 0
+            ;;
+    esac
+done
+
 # Root yetkisi kontrolü
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}[HATA] Bu kurulum betiği root veya sudo yetkisiyle çalıştırılmalıdır.${NC}"
@@ -77,6 +95,27 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "-u" ]; then
         update-desktop-database /usr/share/applications || true
     fi
 
+    # 4. AnonVoid'in ezdiği sistem yapılandırmalarını geri yükle.
+    #    Kaldırma sonrasında daemon çalışmayacağı için torrc ve resolv.conf
+    #    yedekleri geride kalırsa kullanıcının orijinal yapılandırması
+    #    kalıcı olarak kaybolur. Hem yeni hem eski (fp-cleaner) yedek adları
+    #    kontrol edilir.
+    for backup in /etc/tor/torrc.anonvoid.bak /etc/tor/torrc.fp-cleaner.bak; do
+        if [ -f "$backup" ]; then
+            mv -f "$backup" /etc/tor/torrc && \
+                echo -e "${YELLOW}[UYARI] /etc/tor/torrc orijinal haline geri yüklendi.${NC}"
+        fi
+    done
+    for backup in /etc/resolv.conf.anonvoid.bak /etc/resolv.conf.fp-cleaner.bak; do
+        if [ -f "$backup" ]; then
+            mv -f "$backup" /etc/resolv.conf && \
+                echo -e "${YELLOW}[UYARI] /etc/resolv.conf orijinal haline geri yüklendi.${NC}"
+        fi
+    done
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet tor; then
+        systemctl reload tor || true
+    fi
+
     echo -e "${GREEN}[BAŞARILI] AnonVoid tüm bileşenleriyle sistemden başarıyla kaldırıldı.${NC}"
     exit 0
 fi
@@ -95,6 +134,20 @@ fi
 echo -e "${BLUE}[BİLGİ] Tespit edilen işletim sistemi dağıtımı: ${YELLOW}$DISTRO${NC}"
 
 install_dependencies() {
+    if [ "${SKIP_DEPS}" = "1" ]; then
+        echo -e "${CYAN}[*] Bağımlılık kurulumu atlandı (--skip-deps).${NC}"
+        local missing=""
+        for cmd in python3 nft tor dnscrypt-proxy; do
+            command -v "${cmd}" >/dev/null 2>&1 || missing="${missing} ${cmd}"
+        done
+        if [ -n "${missing}" ]; then
+            echo -e "${RED}[HATA] Şu komutlar bulunamadı:${missing}${NC}"
+            echo -e "Lütfen kurun veya betiği --skip-deps olmadan çalıştırın.${NC}"
+            exit 1
+        fi
+        return 0
+    fi
+
     echo -e "${BLUE}[BİLGİ] Sistem bağımlılıkları kuruluyor...${NC}"
 
     case "$DISTRO" in
@@ -207,8 +260,6 @@ setup_systemd_service() {
 
     if [ -f "packaging/systemd/anonvoid.service" ]; then
         cp packaging/systemd/anonvoid.service "/etc/systemd/system/$SERVICE_NAME"
-    elif [ -f "packaging/systemd/fp-cleaner.service" ]; then
-        cp packaging/systemd/fp-cleaner.service "/etc/systemd/system/$SERVICE_NAME"
     elif [ -f "$INSTALL_DIR/packaging/systemd/anonvoid.service" ]; then
         cp "$INSTALL_DIR/packaging/systemd/anonvoid.service" "/etc/systemd/system/$SERVICE_NAME"
     else
@@ -257,14 +308,10 @@ setup_desktop_entry() {
 
     if [ -f "packaging/desktop/anonvoid.desktop" ]; then
         cp packaging/desktop/anonvoid.desktop "$DESKTOP_FILE"
-    elif [ -f "packaging/desktop/fp-cleaner.desktop" ]; then
-        cp packaging/desktop/fp-cleaner.desktop "$DESKTOP_FILE"
     fi
 
     if [ -f "packaging/desktop/anonvoid.svg" ]; then
         cp packaging/desktop/anonvoid.svg "$ICON_FILE"
-    elif [ -f "packaging/desktop/fp-cleaner.svg" ]; then
-        cp packaging/desktop/fp-cleaner.svg "$ICON_FILE"
     fi
 
     chmod 0644 "$DESKTOP_FILE" || true

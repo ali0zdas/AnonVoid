@@ -58,6 +58,8 @@ def build_nuitka_command(
         "--enable-plugin=pyqt6",
         "--include-package=core",
         "--include-package=gui",
+        # Gömülü yazı tipleri ve SVG/PNG arayüz varlıkları Python paketiyle gelir.
+        "--include-package-data=gui",
         "--assume-yes-for-downloads",
         "--remove-output",
     ]
