@@ -12,7 +12,7 @@
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" /></a>
     <a href="https://www.kali.org/"><img src="https://img.shields.io/badge/Distro-Kali%20%7C%20Debian%20%7C%20Arch%20%7C%20Fedora-557C94?style=for-the-badge&logo=linux&logoColor=white" alt="Distributions" /></a>
     <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Security-Zero_Self--Footprint-00d4ff?style=for-the-badge" alt="Zero Self-Footprint" /></a>
-    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Tests-87%2F87_Passing-brightgreen?style=for-the-badge" alt="Tests Passing" /></a>
+    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Tests-90%2F90_Passing-brightgreen?style=for-the-badge" alt="Tests Passing" /></a>
   </p>
 
   <p align="center">
@@ -203,11 +203,11 @@ sudo anonvoid --service
 
 ## 🧪 Birim Testler ve Doğrulama
 
-AnonVoid kod tabanı; IPC haberleşmesi, şema güvenliği, adli temizlik çağrıları, ağ duvarı kuralları ve paketleme yapılarını kapsayan **87 adet kapsamlı birim test** ile korunmaktadır:
+AnonVoid kod tabanı; IPC haberleşmesi, şema güvenliği, adli temizlik çağrıları, ağ duvarı kuralları ve paketleme yapılarını kapsayan **90 adet kapsamlı birim test** ile korunmaktadır:
 
 ```bash
-# Tüm birim test paketini çalıştırma
-python3 -m unittest discover -s tests -p "test_*.py" -v
+# Tüm birim test paketini çalıştırma (bytecode üretmeden)
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/ -q
 ```
 
 ---

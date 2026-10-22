@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
@@ -20,6 +21,13 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+# Kasıtlı olarak var olmayan soket yolu. AGENTS.md gereği herkese yazılabilir
+# /tmp kullanılmaz; test yalnızca "bağlantı kurulamadı" yolunu sınar.
+_RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR") or os.path.join(
+    os.path.expanduser("~"), ".cache"
+)
+MISSING_SOCKET_PATH = os.path.join(_RUNTIME_DIR, "anonvoid-test-yok-boyle-bir-soket.sock")
 
 from core.config import (
     DEFAULT_CONFIG,
@@ -185,18 +193,42 @@ class TestDaemonModule(unittest.TestCase):
             self.fail(f"startup_heal beklenmedik hata fırlattı: {err}")
 
 
+def _pump_gui_events(join_fn, timeout: float) -> None:
+    """Varsa Qt olay döngüsünü döndürerek kuyruklanmış geri çağrıları çalıştırır.
+
+    PyQt6 kurulu değilse veya QApplication yoksa doğrudan çalışan geri
+    çağrılar için ek iş gerekmez.
+    """
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        join_fn(timeout=timeout)
+        return
+
+    app = QApplication.instance()
+    if app is None:
+        join_fn(timeout=timeout)
+        return
+
+    deadline = time.time() + timeout
+    join_fn(timeout=timeout)
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+
 class TestDaemonClientModule(unittest.TestCase):
     """core/daemon_client.py birim testleri."""
 
     def test_client_missing_socket(self):
         """Var olmayan soket için DaemonConnectionError fırlatılmasını test eder."""
-        client = DaemonClient(socket_path="/tmp/non_existent_fp_cleaner_socket.sock")
+        client = DaemonClient(socket_path=MISSING_SOCKET_PATH)
         with self.assertRaises(DaemonConnectionError):
             client.send_request("ping")
 
     def test_async_worker(self):
         """Asenkron worker iş parçacığı hata yakalama ve callback döngüsünü test eder."""
-        client = DaemonClient(socket_path="/tmp/non_existent_fp_cleaner_socket.sock")
+        client = DaemonClient(socket_path=MISSING_SOCKET_PATH)
         error_captured = []
         finished_flag = []
 
@@ -209,8 +241,55 @@ class TestDaemonClientModule(unittest.TestCase):
         worker.start()
         worker.join(timeout=3.0)
 
+        # Qt bağlamında geri çağrılar GUI iş parçacığına kuyruklanır; olay
+        # döngüsü hiç dönmüyorsa kuyruk boşalana kadar beklenmelidir.
+        _pump_gui_events(worker.join, timeout=3.0)
+
         self.assertTrue(len(error_captured) > 0)
         self.assertTrue(len(finished_flag) > 0)
+
+    def test_async_worker_calls_callbacks_on_gui_thread(self):
+        """Geri çağrıların iş parçacığında değil, GUI iş parçacığında çalıştığını doğrular.
+
+        Bu, Qt thread-affinity kuralının ihlali ve buna bağlı uygulama
+        çökmelerini (StatusRingWidget uyarıları, segmentation fault) önler.
+        """
+        try:
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication
+        except ImportError:
+            self.skipTest("PyQt6 kurulu değil.")
+
+        app = QApplication.instance() or QApplication([])
+        gui_thread = QThread.currentThread()
+
+        client = DaemonClient(socket_path=MISSING_SOCKET_PATH)
+        seen_threads = []
+
+        worker = AsyncDaemonWorker(
+            client=client,
+            action="ping",
+            on_error=lambda err: seen_threads.append(QThread.currentThread()),
+            on_finished=lambda: seen_threads.append(QThread.currentThread()),
+        )
+        worker.start()
+        worker.join(timeout=3.0)
+
+        deadline = time.time() + 5.0
+        while len(seen_threads) < 2 and time.time() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual(len(seen_threads), 2, "Geri çağrılar kuyruklanmadı.")
+        for thread in seen_threads:
+            # PyQt her çağrıda yeni bir sarmalayıcı üretebilir; aynı iş parçacığı
+            # kimliği için altta yatan C++ nesnesi karşılaştırılır.
+            self.assertEqual(
+                thread,
+                gui_thread,
+                "Geri çağrı arka plan iş parçacığında çalıştı; Qt bileşenlerine "
+                "farklı iş parçacığından erişilmiş olur.",
+            )
 
 
 if __name__ == "__main__":

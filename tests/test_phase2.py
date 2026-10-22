@@ -65,7 +65,11 @@ class TestLowLevelForensics(unittest.TestCase):
 
     def test_shred_non_existent_file(self):
         """Olmayan dosya için shred_file False dönmelidir."""
-        self.assertFalse(shred_file("/tmp/non_existent_target_12345.bin"))
+        missing = os.path.join(
+            os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.cache"),
+            "anonvoid-test-var-olmayan-hedef.bin",
+        )
+        self.assertFalse(shred_file(missing))
 
 
 class TestShellForensics(unittest.TestCase):

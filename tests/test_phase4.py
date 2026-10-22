@@ -24,6 +24,14 @@ if PROJECT_ROOT not in sys.path:
 
 GUI_DIR = os.path.join(PROJECT_ROOT, "gui")
 
+# GUI testleri gerçek bir daemon'a bağlanmaz; ancak AGENTS.md gereği /tmp
+# kullanılmadığından çalıştıran kullanıcının çalışma zamanı dizininde,
+# var olmayan bir soket yolu kullanılır.
+_UNUSED_SOCKET_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.cache"),
+    "anonvoid-test-baglanilmayacak.sock",
+)
+
 from PyQt6.QtWidgets import QApplication
 
 from core.daemon_client import DaemonClient
@@ -280,7 +288,7 @@ class TestForensicsPanel(unittest.TestCase):
 
     def test_matrix_targets_and_selection(self):
         """Seçim matrisi ve toplu seçim metodlarını test eder."""
-        client = DaemonClient("/tmp/test.sock")
+        client = DaemonClient(_UNUSED_SOCKET_PATH)
         panel = ForensicsPanel(client)
 
         targets = panel.get_selected_targets()
@@ -304,7 +312,7 @@ class TestMainWindow(unittest.TestCase):
     """gui/main_window.py testleri."""
 
     def _make_window(self):
-        client = DaemonClient("/tmp/test.sock")
+        client = DaemonClient(_UNUSED_SOCKET_PATH)
         return MainWindow(client)
 
     def test_main_window_pages_and_navigation(self):
@@ -369,6 +377,80 @@ class TestMainWindow(unittest.TestCase):
         before = win._is_connected
         win._toggle_connection()
         self.assertEqual(win._is_connected, before)
+
+    def _capture_poll_callbacks(self, win):
+        """`_poll_daemon_status` çağrısının geri çağrılarını yakalar (ağ yok)."""
+        from unittest import mock
+
+        captured = {}
+
+        class _FakeWorker:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def start(self):
+                return None
+
+        with mock.patch("gui.main_window.AsyncDaemonWorker", _FakeWorker):
+            win._poll_daemon_status()
+        return captured
+
+    def test_poll_does_not_interrupt_connecting_animation(self):
+        """Bağlanma sürerken durum yoklaması animasyonu KESMEMELİDİR.
+
+        Regresyon: yoklama 3 saniyede bir çalışır ve `connect` henüz
+        tamamlanmadan `network_shield_active: false` okur. Eski kod bu
+        yanıtla `_apply_shield_state(False)` çağırıp "bağlanıyor" halkasını
+        durduruyor ve butonu geri alıyordu; bağlantı bitince 5 saniye içinde
+        tekrar "koruma aktif" oluyordu. Yani geçici ama yanıltıcı bir
+        "başarısız" görünümü oluşuyordu.
+        """
+        win = self._make_window()
+        win._set_daemon_state(True)
+
+        win._begin_shield_op()
+        win.status_ring.set_status("CONNECTING")
+        win.btn_connect.setEnabled(False)
+
+        callbacks = self._capture_poll_callbacks(win)
+        callbacks["on_success"]({"network_shield_active": False, "tor_active": True})
+
+        # Animasyon ve buton durumu korunmalı
+        self.assertEqual(win.status_ring._status, "CONNECTING")
+        self.assertFalse(win.btn_connect.isEnabled())
+        self.assertFalse(win._is_connected)
+
+    def test_poll_stale_response_ignored_after_connect_finished(self):
+        """İstek gönderildikten sonra yanıt gelene kadar durum değiştiyse yanıt yok sayılır."""
+        win = self._make_window()
+        win._set_daemon_state(True)
+
+        # Yoklama isteği gönderilir (sürüm N)
+        callbacks = self._capture_poll_callbacks(win)
+
+        # Yanıt gelmeden kalkan işlemi başlar ve biter (sürüm N+2)
+        win._begin_shield_op()
+        win._end_shield_op()
+        win._apply_shield_state(True)
+
+        # Bayat yanıt: kalkan hâlâ kapalı diyor
+        callbacks["on_success"]({"network_shield_active": False, "tor_active": True})
+
+        # Güncel yerel durum korunmalı
+        self.assertTrue(win._is_connected)
+        self.assertEqual(win.status_ring._status, "CONNECTED")
+        self.assertEqual(win.btn_connect.text(), "BAĞLANTIYI KES")
+
+    def test_poll_applies_state_when_no_shield_op_running(self):
+        """İşlem sürerken değilse yoklama sonucu normal biçimde uygulanır."""
+        win = self._make_window()
+        win._set_daemon_state(True)
+
+        callbacks = self._capture_poll_callbacks(win)
+        callbacks["on_success"]({"network_shield_active": True, "tor_active": True})
+
+        self.assertTrue(win._is_connected)
+        self.assertEqual(win.status_ring._status, "CONNECTED")
 
     def test_panic_requires_double_confirmation(self):
         """Panik eylemi ilk tıklamada yalnızca hazırlanmalı, ikinci tıklamada onay istemeli."""
