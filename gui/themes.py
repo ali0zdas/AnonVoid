@@ -24,9 +24,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-# Tipografi yığınları: Linux (Kali) öncelikli, geriye dönük uyumlu.
-UI_FONT_STACK = "'Inter', 'Noto Sans', 'DejaVu Sans', 'Ubuntu', 'Liberation Sans', sans-serif"
-MONO_FONT_STACK = "'JetBrains Mono', 'DejaVu Sans Mono', 'Noto Sans Mono', 'Liberation Mono', monospace"
+# Tipografi yığınları: Hem Windows hem Linux (Kali) için garantili sans-serif ve mono.
+UI_FONT_STACK = "'Inter', 'Segoe UI', 'Ubuntu', 'Noto Sans', 'DejaVu Sans', 'Liberation Sans', 'Arial', sans-serif"
+MONO_FONT_STACK = "'JetBrains Mono', 'Fira Code', 'Cascadia Mono', 'Consolas', 'DejaVu Sans Mono', 'Noto Sans Mono', 'Courier New', monospace"
+
+_ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "ui")
+
+
+def _asset_url(name: str) -> str:
+    """QSS `url(...)` ifadesi için gömülü arayüz varlığının mutlak yolunu üretir."""
+    path = os.path.join(_ASSET_DIR, name).replace("\\", "/")
+    return f'"{path}"'
 
 
 # 5 Dinamik Temanın Semantik Renk Paletleri.
@@ -38,25 +46,25 @@ THEME_PALETTES: Dict[str, Dict[str, str]] = {
     #    kenarlarını yıpratır.
     "oled": {
         "name": "OLED (Koyu Profesyonel)",
-        "bg_main": "#0b0d10",
-        "bg_sidebar": "#0f1216",
-        "bg_surface": "#14181d",
-        "bg_surface_alt": "#1a1f26",
-        "bg_hover": "#1e242c",
-        "border": "#2e3641",
-        "border_strong": "#3f4a58",
-        "accent": "#4da3ff",
-        "accent_hover": "#75b6ff",
+        "bg_main": "#090b0f",
+        "bg_sidebar": "#0c0f14",
+        "bg_surface": "#11151b",
+        "bg_surface_alt": "#161b23",
+        "bg_hover": "#1c222c",
+        "border": "#212833",
+        "border_strong": "#2f3945",
+        "accent": "#4f97ff",
+        "accent_hover": "#7ab3ff",
         "on_accent": "#06101c",
-        "text_primary": "#e8ecf1",
-        "text_secondary": "#a3aebb",
-        "text_muted": "#7c8896",
-        "success": "#3dd68c",
-        "warning": "#f2b441",
-        "danger": "#ff5c6c",
-        "info": "#4da3ff",
-        "ring_active": "#3dd68c",
-        "ring_track": "#2b333d",
+        "text_primary": "#eef2f7",
+        "text_secondary": "#aab5c3",
+        "text_muted": "#7d8998",
+        "success": "#35d18b",
+        "warning": "#f3b64a",
+        "danger": "#ff5f6d",
+        "info": "#4f97ff",
+        "ring_active": "#35d18b",
+        "ring_track": "#212833",
         "shadow": "#000000",
     },
     # 2. Circuit: Derin yeşil-slate PCB hissi.
@@ -383,17 +391,39 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
         padding: 0px;
     }}
 
+    #sidebarVersion {{
+        font-size: 9px;
+        font-weight: 700;
+        color: {pal["text_muted"]};
+        background-color: {pal["bg_surface"]};
+        border: 1px solid {pal["border"]};
+        border-radius: 6px;
+        padding: 3px 8px;
+    }}
+
+    /* Gösterge paneli kaydırma alanı: çerçevesiz ve saydam. */
+    QScrollArea#dashboardScroll {{
+        background: transparent;
+        border: none;
+    }}
+    QScrollArea#dashboardScroll > QWidget > QWidget {{
+        background: transparent;
+    }}
+    #dashboardPage {{
+        background: transparent;
+    }}
+
     /* Kenar çubuğu gezinme düğmeleri.
-       Sol kenarlık her durumda 3px yer kaplar; renk değiştiği için etkin
-       butona tıklandığında metin kaymaz (yerleşim titremesi olmaz). */
+       Etkin öğe, yumuşak vurgulu bir "hap" görünümü alır; sol kenarlık
+       kullanılmaz, böylece metin yatay olarak kaymaz (yerleşim titremesi olmaz). */
     QPushButton.navButton {{
         background-color: transparent;
         color: {pal["text_secondary"]};
         border: none;
-        border-left: 3px solid transparent;
-        border-radius: 0px;
+        border-radius: 8px;
         text-align: left;
-        padding: 9px 12px 9px 13px;
+        padding: 9px 12px;
+        margin: 2px 12px;
         font-size: 13px;
         font-weight: 500;
     }}
@@ -402,9 +432,8 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
         color: {pal["text_primary"]};
     }}
     QPushButton.navButton[active="true"] {{
-        background-color: {pal["bg_surface"]};
+        background-color: {rgba(pal["accent"], 26)};
         color: {pal["accent"]};
-        border-left: 3px solid {pal["accent"]};
         font-weight: 600;
     }}
 
@@ -412,7 +441,7 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
     .cardFrame {{
         background-color: {pal["bg_surface"]};
         border: 1px solid {pal["border"]};
-        border-radius: 10px;
+        border-radius: 12px;
     }}
     .cardFrame[interactive="true"]:hover {{
         border: 1px solid {pal["border_strong"]};
@@ -422,13 +451,13 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
     .panelFrame {{
         background-color: {pal["bg_surface"]};
         border: 1px solid {pal["border"]};
-        border-radius: 10px;
+        border-radius: 12px;
     }}
 
     .insetFrame {{
         background-color: {pal["bg_surface_alt"]};
         border: 1px solid {pal["border"]};
-        border-radius: 8px;
+        border-radius: 10px;
     }}
 
     /* --- Tipografi ------------------------------------------------------ */
@@ -484,7 +513,7 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
         background-color: {pal["bg_surface_alt"]};
         color: {pal["text_primary"]};
         border: 1px solid {pal["border"]};
-        border-radius: 6px;
+        border-radius: 8px;
         padding: 8px 14px;
         font-size: 12px;
         font-weight: 600;
@@ -509,7 +538,9 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
         background-color: {pal["accent"]};
         color: {pal["on_accent"]};
         border: 1px solid {pal["accent"]};
+        border-radius: 9px;
         font-weight: 700;
+        padding: 11px 18px;
     }}
     QPushButton#primaryButton:hover {{
         background-color: {pal["accent_hover"]};
@@ -640,7 +671,12 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
 
     QComboBox::drop-down {{
         border: none;
-        width: 20px;
+        width: 22px;
+    }}
+    QComboBox::down-arrow {{
+        image: url({_asset_url("chevron-down.png")});
+        width: 12px;
+        height: 12px;
     }}
     QComboBox QAbstractItemView {{
         background-color: {pal["bg_surface"]};
@@ -654,9 +690,9 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
     }}
 
     QSpinBox::up-button, QSpinBox::down-button {{
-        background-color: {pal["bg_hover"]};
+        width: 0px;
         border: none;
-        width: 16px;
+        background: transparent;
     }}
 
     /* --- Onay kutuları ve radyo düğmeleri -------------------------------- */
@@ -683,6 +719,7 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
     QCheckBox::indicator:checked {{
         background-color: {pal["accent"]};
         border: 1px solid {pal["accent"]};
+        image: url({_asset_url("check.png")});
     }}
     QRadioButton::indicator:checked {{
         background-color: {pal["accent"]};
@@ -768,26 +805,26 @@ def get_theme_stylesheet(theme_key: Optional[str] = None) -> str:
 
     QScrollBar:vertical {{
         background: transparent;
-        width: 10px;
-        margin: 0px;
+        width: 8px;
+        margin: 2px;
     }}
     QScrollBar::handle:vertical {{
         background: {pal["border_strong"]};
-        border-radius: 5px;
-        min-height: 30px;
+        border-radius: 4px;
+        min-height: 32px;
     }}
     QScrollBar::handle:vertical:hover {{
         background: {pal["text_muted"]};
     }}
     QScrollBar:horizontal {{
         background: transparent;
-        height: 10px;
-        margin: 0px;
+        height: 8px;
+        margin: 2px;
     }}
     QScrollBar::handle:horizontal {{
         background: {pal["border_strong"]};
-        border-radius: 5px;
-        min-width: 30px;
+        border-radius: 4px;
+        min-width: 32px;
     }}
     QScrollBar::handle:horizontal:hover {{
         background: {pal["text_muted"]};

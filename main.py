@@ -109,6 +109,44 @@ def run_gui() -> int:
     return app.exec()
 
 
+def run_terminal_connect(disconnect: bool = False) -> int:
+    """Ağ kalkanını terminalden açar veya kapatır.
+
+    GUI açılmadığında ya da arayüz yanıt vermediğinde kullanıcının elinde
+    her zaman bir kaçış yolu olmalıdır. `--disconnect` bu nedenle özellikle
+    önemlidir: tüm nftables/iptables kurallarını temizler.
+    """
+    from core.daemon_client import DaemonClient, DaemonResponseError
+
+    client = DaemonClient()
+    try:
+        if disconnect:
+            print("Ağ kalkanı kapatılıyor...")
+            resp = client.disconnect_network()
+            if resp.get("status") == "ok":
+                print("Ağ kalkanı kapatıldı; kurallar temizlendi.")
+                return 0
+            print(f"Hata: {resp.get('error', 'bilinmeyen hata')}")
+            return 1
+
+        print("Ağ kalkanı başlatılıyor (Tor doğrulanana kadar beklenebilir)...")
+        resp = client.send_request("connect", {"network": {}}, timeout=130.0)
+        data = resp.get("data", {})
+        if data.get("connected"):
+            ports = data.get("actual_ports", {})
+            print("Ağ kalkanı AÇIK.")
+            for label, info in ports.items():
+                if isinstance(info, dict) and info.get("port"):
+                    print(f"  {label}: {info['port']} ({info.get('source')})")
+            return 0
+        reason = data.get("error") or data.get("tor_check", {}).get("reason") or "bilinmeyen neden"
+        print(f"Ağ kalkanı kurulamadı: {reason}")
+        return 1
+    except DaemonResponseError as err:
+        print(f"Daemon hatası: {err}")
+        return 1
+
+
 def main() -> int:
     """Komut satırı argümanlarını ayrıştırır ve uygun modu başlatır."""
     parser = argparse.ArgumentParser(
@@ -134,6 +172,19 @@ def main() -> int:
         action="store_true",
         help="Acil durum panik protokolünü (Kill-Switch & Wipe) anında çalıştırır.",
     )
+    parser.add_argument(
+        "--connect",
+        action="store_true",
+        help="Ağ kalkanını terminalden başlatır (Tor doğrulanana kadar bekler).",
+    )
+    parser.add_argument(
+        "--disconnect",
+        action="store_true",
+        help=(
+            "Ağ kalkanını kapatır ve nftables/iptables kurallarını temizler. "
+            "Bağlantınız kilitlendiyse bu komutu kullanın."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -146,6 +197,10 @@ def main() -> int:
         return run_terminal_leak_test()
     elif args.panic:
         return run_terminal_panic()
+    elif args.connect:
+        return run_terminal_connect(disconnect=False)
+    elif args.disconnect:
+        return run_terminal_connect(disconnect=True)
     else:
         return run_gui()
 

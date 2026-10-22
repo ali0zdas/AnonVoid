@@ -111,10 +111,18 @@ class LeakPanel(QWidget):
 
         grid = QGridLayout()
         grid.setSpacing(12)
-        self.lbl_tor = self._create_indicator("Tor Çıkış IP Doğrulaması", GLYPH_TOR, "Henüz test edilmedi")
-        self.lbl_dns = self._create_indicator("DNS Sızıntı Koruması", GLYPH_DNS, "Henüz test edilmedi")
-        self.lbl_ipv6 = self._create_indicator("IPv6 Sızıntı Kalkanı", GLYPH_MAC, "Henüz test edilmedi")
-        self.lbl_webrtc = self._create_indicator("WebRTC STUN Kaçağı", GLYPH_LEAK, "Henüz test edilmedi")
+        self.lbl_tor = self._create_indicator(
+            "Tor Çıkış IP Doğrulaması", GLYPH_TOR, "Henüz test edilmedi", icon="network"
+        )
+        self.lbl_dns = self._create_indicator(
+            "DNS Sızıntı Koruması", GLYPH_DNS, "Henüz test edilmedi", icon="dns"
+        )
+        self.lbl_ipv6 = self._create_indicator(
+            "IPv6 Sızıntı Kalkanı", GLYPH_MAC, "Henüz test edilmedi", icon="globe"
+        )
+        self.lbl_webrtc = self._create_indicator(
+            "WebRTC STUN Kaçağı", GLYPH_LEAK, "Henüz test edilmedi", icon="leak"
+        )
         grid.addWidget(self.lbl_tor, 0, 0)
         grid.addWidget(self.lbl_dns, 0, 1)
         grid.addWidget(self.lbl_ipv6, 1, 0)
@@ -139,7 +147,7 @@ class LeakPanel(QWidget):
 
         main_layout.addStretch(1)
 
-    def _create_indicator(self, title: str, glyph: str, initial: str) -> QFrame:
+    def _create_indicator(self, title: str, glyph: str, initial: str, icon: str = "") -> QFrame:
         """Başlık + glif + durum metninden oluşan gösterge kartı üretir."""
         frame = QFrame(self)
         frame.setProperty("class", "cardFrame")
@@ -151,7 +159,7 @@ class LeakPanel(QWidget):
 
         head = QHBoxLayout()
         head.setSpacing(9)
-        chip = GlyphChip(glyph, "text_muted", 26, frame)
+        chip = GlyphChip(glyph, "text_muted", 30, frame, icon=icon)
         head.addWidget(chip)
         title_lbl = QLabel(title, frame)
         title_lbl.setObjectName("cardTitle")
@@ -182,7 +190,10 @@ class LeakPanel(QWidget):
         AsyncDaemonWorker(
             client=self.client,
             action="leak_test",
-            timeout=30.0,
+            # Test paketi dört ayrı ağ probu yapar (Tor çıkış IP, IPv6, DNS, STUN).
+            # En kötü durumda her biri kendi zaman aşımını sürebildiği için 30s
+            # yetersiz kalıyor ve istemci daemon'dan önce vazgeçiyordu.
+            timeout=90.0,
             on_success=_on_success,
             on_error=_on_error,
         ).start()

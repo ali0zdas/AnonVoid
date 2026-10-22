@@ -119,17 +119,19 @@ class SettingsPanel(QWidget):
 
         container_layout.addWidget(net_group)
 
-        # 2. Görünüm ve Genel Tercihler
-        app_group = QGroupBox("Görünüm ve Uygulama Davranışı", container)
+        # 2. Görünüm ve Uygulama Tercihleri
+        app_group = QGroupBox("Uygulama Tercihleri ve Görünüm", container)
         app_form = QFormLayout(app_group)
         app_form.setContentsMargins(16, 16, 16, 16)
         app_form.setSpacing(10)
 
+        theme_badge = QLabel("Dark (Koyu Profesyonel — Standart Sabit Tema)", app_group)
+        theme_badge.setObjectName("cardCaption")
+        app_form.addRow("Görsel Tema:", theme_badge)
+
         self.combo_theme = QComboBox(app_group)
-        for theme_key, theme_name in get_available_themes().items():
-            self.combo_theme.addItem(theme_name, theme_key)
-        self.combo_theme.currentIndexChanged.connect(self._on_theme_selected)
-        app_form.addRow("Görsel Tema Seçimi:", self.combo_theme)
+        self.combo_theme.addItem("Dark (Koyu Profesyonel)", "oled")
+        self.combo_theme.setVisible(False)
 
         self.chk_close_to_tray = QCheckBox("Pencere Kapatıldığında Sistem Tepsisine Küçül", app_group)
         app_form.addRow("", self.chk_close_to_tray)
@@ -189,7 +191,7 @@ class SettingsPanel(QWidget):
 
     def save_settings(self) -> None:
         """Arayüzdeki güncel ayarları doğrular ve güvenle diske kaydeder."""
-        theme_key = self.combo_theme.currentData()
+        theme_key = "oled"
 
         updated_config = {
             "network": {
