@@ -22,7 +22,7 @@ from core.forensics.lowlevel import sync_disks
 from core.forensics.memory import drop_ram_caches
 from core.forensics.shell import clean_shell_history
 
-logger = logging.getLogger("FPCleanerPanic")
+logger = logging.getLogger("AnonVoidPanic")
 
 
 def apply_emergency_network_kill() -> bool:

@@ -20,7 +20,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import lock_process_memory, sync_disks
 
-logger = logging.getLogger("FPCleanerMemory")
+logger = logging.getLogger("AnonVoidMemory")
 
 
 def drop_ram_caches() -> Dict[str, Any]:

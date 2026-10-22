@@ -303,8 +303,11 @@ def validate_full_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         base_daemon = DEFAULT_CONFIG["daemon"]
 
         sock_path = str(daemon_cfg.get("socket_path", base_daemon["socket_path"])).strip()
-        # Güvenli soket yolu kontrolü
-        if sock_path.startswith("/run/") or sock_path.startswith("/tmp/"):
+        # Güvenli soket yolu kontrolü: yalnızca kök dosya sistemindeki /run/
+        # altı kabul edilir. /tmp herkese yazılabilir olduğu için sembolik bağ
+        # ve FIFO değiştirme saldırılarına açıktır (AGENTS.md güvenli geçici
+        # dosya ilkesi) ve bu nedenle beyaz listede tutulmaz.
+        if sock_path.startswith("/run/") and "\x00" not in sock_path:
             validated["daemon"]["socket_path"] = sock_path
         else:
             validated["daemon"]["socket_path"] = base_daemon["socket_path"]

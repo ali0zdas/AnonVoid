@@ -27,6 +27,65 @@ logger = logging.getLogger("AnonVoidClient")
 DEFAULT_SOCKET_PATH = "/run/anonvoid/daemon.sock"
 
 
+# -----------------------------------------------------------------------------
+# GUI İş Parçacığına Geri Çağrı Taşıma Köprüsü
+# -----------------------------------------------------------------------------
+# Qt, her QObject'in ait olduğu tek bir iş parçacığı vardır. Bir QWidget'e
+# başka bir iş parçacığından erişmek "Cannot create children for a parent that
+# is in a different thread" uyarısı üretir ve uygulamayı çökertir. Bu köprü,
+# arka plan iş parçacığından gelen geri çağrıları GUI iş parçacığına kuyruklu
+# (queued) sinyal ile aktarır.
+_GUI_INVOKER: Optional["_QtGuiInvoker"] = None
+
+try:
+    from PyQt6.QtCore import QObject, Qt, pyqtSignal
+
+    class _QtGuiInvoker(QObject):
+        """Arka plan iş parçacığından GUI iş parçacığına çağrı aktarır."""
+
+        _invoke = pyqtSignal(object)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._invoke.connect(self._run, Qt.ConnectionType.QueuedConnection)
+
+        def _run(self, fn: Callable[[], None]) -> None:
+            try:
+                fn()
+            except Exception as err:
+                logger.exception("GUI iş parçacığına aktarılan geri çağrı başarısız: %s", err)
+
+        def post(self, fn: Callable[[], None]) -> None:
+            self._invoke.emit(fn)
+
+    def _get_gui_invoker() -> Optional["_QtGuiInvoker"]:
+        """GUI iş parçacığında yaşayan köprüyü döndürür (Qt yoksa None).
+
+        Köprü, ana (GUI) iş parçacığında oluşturulmalıdır; bu yüzden ilk çağrı
+        AsyncDaemonWorker.__init__ içinden, yani iş parçacığı başlatılmadan
+        önce yapılır.
+        """
+        global _GUI_INVOKER
+        if _GUI_INVOKER is not None:
+            return _GUI_INVOKER
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            if QApplication.instance() is None:
+                return None
+            _GUI_INVOKER = _QtGuiInvoker()
+        except ImportError:
+            return None
+        return _GUI_INVOKER
+
+except ImportError:
+    # PyQt6 kurulu değilse (CLI kullanımı) doğrudan çağırma yoluna düşülür
+    _QtGuiInvoker = None  # type: ignore
+
+    def _get_gui_invoker() -> None:  # type: ignore[misc]
+        return None
+
+
 class DaemonError(Exception):
     """Daemon istemcisi temel istisna sınıfı."""
 
@@ -218,9 +277,29 @@ class AsyncDaemonWorker(threading.Thread):
         self.on_success = on_success
         self.on_error = on_error
         self.on_finished = on_finished
+        # Köprü, bu satır GUI iş parçacığında çalıştığı için doğru iş parçacığına
+        # ait olacak biçimde oluşturulur.
+        self._invoker = _get_gui_invoker()
+
+    def _dispatch(self, fn: Optional[Callable[[], None]]) -> None:
+        """Geri çağrıyı GUI iş parçacığında çalıştırır.
+
+        Köprü yoksa (Qt bulunmayan CLI ortamı) doğrudan çağrılır.
+        """
+        if fn is None:
+            return
+        if self._invoker is not None:
+            self._invoker.post(fn)
+        else:
+            fn()
 
     def run(self) -> None:
-        """İsteği arka planda yürütür ve geri çağırma (callback) fonksiyonlarını tetikler."""
+        """İsteği arka planda yürütür ve geri çağırma (callback) fonksiyonlarını tetikler.
+
+        NOT: Geri çağrılar doğrudan bu iş parçacığında değil, GUI iş parçacığında
+        çalıştırılır. Aksi halde arayüz bileşenlerine yanlış iş parçacığından
+        erişilir ve Qt uygulamayı çökertir.
+        """
         try:
             result = self.client.send_request(
                 self.action,
@@ -228,14 +307,15 @@ class AsyncDaemonWorker(threading.Thread):
                 timeout=self.timeout,
             )
             if self.on_success:
-                self.on_success(result.get("data", {}))
+                data = result.get("data", {})
+                self._dispatch(lambda: self.on_success(data))  # type: ignore[misc]
         except Exception as err:
             logger.error("Arka plan iş parçacığında istek başarısız (%s): %s", self.action, err)
             if self.on_error:
-                self.on_error(str(err))
+                message = str(err)
+                self._dispatch(lambda: self.on_error(message))  # type: ignore[misc]
         finally:
-            if self.on_finished:
-                self.on_finished()
+            self._dispatch(self.on_finished)
 
 
 # -----------------------------------------------------------------------------

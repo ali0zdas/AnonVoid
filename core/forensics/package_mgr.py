@@ -21,7 +21,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import sync_disks
 
-logger = logging.getLogger("FPCleanerPkgMgr")
+logger = logging.getLogger("AnonVoidPkgMgr")
 
 
 def detect_package_managers() -> List[str]:

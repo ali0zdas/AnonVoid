@@ -21,7 +21,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import shred_file, sync_disks
 
-logger = logging.getLogger("FPCleanerLogs")
+logger = logging.getLogger("AnonVoidLogs")
 
 # Oturum ve Giriş İzleme Kayıt Dosyaları
 AUTH_LOG_FILES: List[str] = [

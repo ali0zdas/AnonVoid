@@ -50,7 +50,16 @@ from core.network.firewall import FirewallEngine
 from core.network.leak_test import run_full_leak_test
 from core.network.mac import MACManager
 from core.network.panic import execute_panic_nuke
-from core.network.tor import TorManager, renew_tor_circuit
+from core.network.tor import (
+    TOR_BOOTSTRAP_WAIT_SEC,
+    TorManager,
+    check_tor_ready,
+    get_tor_listener_port,
+    is_tor_running as is_tor_running_service,
+    renew_tor_circuit,
+    test_tor_circuit_socks,
+    wait_for_tor_ready,
+)
 
 # Linux üzerinde SO_PEERCRED soket seçeneği sabiti
 SO_PEERCRED = getattr(socket, "SO_PEERCRED", 17)
@@ -105,7 +114,8 @@ class RootDaemon:
     ) -> None:
         self.socket_path = socket_path
         self.socket_group = socket_group
-        self.config_path = config_path or f"{SOCKET_DIR}/active_config.json"
+        self.socket_dir = os.path.dirname(os.path.abspath(socket_path)) or SOCKET_DIR
+        self.config_path = config_path or f"{self.socket_dir}/active_config.json"
         self._running = False
         self._server_sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
@@ -154,7 +164,7 @@ class RootDaemon:
         """
         logger.info("Başlangıç kendi kendini iyileştirme (_startup_heal) süreci başlatıldı.")
 
-        # 1. nftables temizliği (anonvoid ve fp-cleaner tabloları)
+        # 1. nftables temizliği (anonvoid tabloları ve eski fp-cleaner tabloları)
         tables_to_delete = [
             ("inet", "anonvoid"),
             ("ip6", "anonvoid"),
@@ -199,12 +209,12 @@ class RootDaemon:
         except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
             pass
 
-        # 3. /run/fp-cleaner altındaki yetim kilit ve geçici dosyaları süpür
-        if os.path.exists(SOCKET_DIR):
+        # 3. Soket dizini altındaki yetim kilit ve geçici dosyaları süpür
+        if os.path.exists(self.socket_dir):
             try:
-                for fname in os.listdir(SOCKET_DIR):
+                for fname in os.listdir(self.socket_dir):
                     if fname.endswith((".lock", ".pid", ".tmp")):
-                        fpath = os.path.join(SOCKET_DIR, fname)
+                        fpath = os.path.join(self.socket_dir, fname)
                         try:
                             if not os.path.islink(fpath):
                                 os.unlink(fpath)
@@ -220,8 +230,21 @@ class RootDaemon:
     # -------------------------------------------------------------------------
     def _setup_socket(self) -> socket.socket:
         """Unix Domain Socket dosyasını güvenli izinlerle açar."""
-        # /run/fp-cleaner dizinini oluştur (İzin: 0755 root:root)
-        os.makedirs(SOCKET_DIR, mode=0o755, exist_ok=True)
+        # Soket dizinini oluştur. Dizin, yapılandırılmış soket yolundan türetilir;
+        # global /run/anonvoid sabiti kullanılmaz, aksi halde test veya taşınabilir
+        # kurulumlarda root gerektiren bir dizin yazma hatası tetiklenir.
+        sock_dir = os.path.dirname(os.path.abspath(self.socket_path)) or SOCKET_DIR
+        self.socket_dir = sock_dir
+        try:
+            os.makedirs(sock_dir, mode=0o755, exist_ok=True)
+        except PermissionError as err:
+            raise RuntimeError(
+                f"Soket dizini oluşturulamadı: {sock_dir}. "
+                "AnonVoid daemon root yetkisiyle çalışmalıdır "
+                "(systemd: systemctl start anonvoid.service)."
+            ) from err
+        except OSError as err:
+            raise RuntimeError(f"Soket dizini oluşturulamadı: {sock_dir} ({err}).") from err
 
         # Eski soket dosyası varsa güvenle kaldır
         if os.path.exists(self.socket_path):
@@ -253,7 +276,7 @@ class RootDaemon:
         except OSError as err:
             logger.warning("Soket izinleri 0660 olarak ayarlanamadı: %s", err)
 
-        # Grup sahipliğini ayarla: root:fp-cleaner
+        # Grup sahipliğini ayarla: root:anonvoid
         if hasattr(os, "chown") and grp is not None and hasattr(grp, "getgrnam"):
             try:
                 group_info = grp.getgrnam(self.socket_group)
@@ -388,19 +411,29 @@ class RootDaemon:
             return status_copy
 
     def _handle_connect(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
-        """Ağ kalkanını (Tor, DNSCrypt, nftables, MAC) aktifleştirir."""
-        validated_net = validate_network_config(params.get("network", {}))
-        
-        # 1. MAC Adresi Sahteleme (İsteğe bağlı)
-        mac_results = {}
-        if validated_net.get("mac_randomize", True):
-            mac_results = self.mac_manager.randomize_all_physical_interfaces(
-                in_place=validated_net.get("mac_in_place", True)
-            )
+        """Ağ kalkanını (Tor, DNSCrypt, nftables, MAC) aktifleştirir.
 
-        # 2. Tor Yapılandırması ve Yeniden Yükleme
+        Güvenlik sırası önemlidir: kill-switch kuralları TÜM giden TCP
+        trafiğini Tor TransPort'a yönlendirir. Tor ayakta değilse bu kural
+        sistemin bütün internet erişimini (ve bu daemon'a bağlı olan her
+        istemci bağlantısını) karartır. Bu yüzden önce Tor'un gerçekten devre
+        kurduğu doğrulanır; doğrulanamazsa hiçbir ağ kuralı uygulanmaz ve MAC
+        sahtelemesi geri alınır.
+        """
+        validated_net = validate_network_config(params.get("network", {}))
+
+        # 1. Tor Yapılandırması ve Başlatma
+        #
+        # SIRA ÖNEMLİ: MAC adresi sahtelemesi artık EN SONA alınmıştır.
+        # MAC değişikliği (özellikle sanal makine NAT ağlarında) DHCP kirasını
+        # bozar ve arayüzün bağlantısını geçici olarak keser. Bu, Tor'un
+        # guard bağlantısını düşürür ve saniyelerce devre kurulamamasına yol
+        # açar. Önce Tor doğrulanıp kalkan kurulur; MAC en sonda değiştirilir
+        # ve Tor bozulursa yalnızca MAC geri alınır (kalkan korunur).
         tor_success = True
-        if validated_net.get("tor_enabled", True):
+        mac_results: Dict[str, Any] = {}
+        tor_enabled = bool(validated_net.get("tor_enabled", True))
+        if tor_enabled:
             tor_success = self.tor_manager.configure_and_reload(
                 trans_port=validated_net["tor_trans_port"],
                 dns_port=validated_net["tor_dns_port"],
@@ -408,19 +441,139 @@ class RootDaemon:
                 control_port=validated_net["tor_control_port"],
             )
 
-        # 3. DNSCrypt ve systemd-resolved Kilidi
+        # 3. ÖN KONTROL: Kill-switch yalnızca Tor doğrulanırsa kurulur.
+        tor_check: Dict[str, Any] = {"ready": False, "reason": "Tor devre dışı bırakıldı."}
+        actual_ports: Dict[str, Any] = {}
+        if tor_enabled:
+            # Tor başlatılamadıysa 90 saniye boşuna beklemeyelim: net bir hata ver.
+            if not is_tor_running_service():
+                self._rollback_connect(mac_results)
+                message = (
+                    "Ağ kalkanı kurulmadı: Tor servisi başlatılamadı. "
+                    "Tor kurulu mu ve 'tor' servisi kullanılabilir mi kontrol edin. "
+                    "Kill-switch, Tor çalışmazken tüm internet erişimini keser; bu "
+                    "nedenle güvenlik gereği kurulmadı."
+                )
+                logger.error(message)
+                with self._lock:
+                    self.state["network_shield_active"] = False
+                    self.state["tor_active"] = False
+                return {
+                    "connected": False,
+                    "error": message,
+                    "tor_active": False,
+                    "firewall_active": False,
+                    "tor_check": {"ready": False, "reason": "Tor servisi çalışmıyor."},
+                    "mac_rolled_back": bool(mac_results),
+                    "timestamp": time.time(),
+                }
+
+            # Opsec'in yaklaşımı: Tor'un gerçekten devre kurmasını bekle.
+            # Bootstrap ilk açılışta ~50 sn sürebilir; kill-switch erkenden
+            # kurulursa tüm trafik karartılır. Bu yüzden 90 sn'ye kadar bekle.
+            tor_check = wait_for_tor_ready(
+                control_port=validated_net["tor_control_port"],
+                socks_port=validated_net["tor_socks_port"],
+                timeout=TOR_BOOTSTRAP_WAIT_SEC,
+            )
+            if not tor_check["ready"]:
+                # Tor doğrulanamadı: sistemi karartmak yerine kullanıcıyı bilgilendir.
+                self._rollback_connect(mac_results)
+                message = (
+                    "Ağ kalkanı kurulmadı: "
+                    f"{tor_check['reason']} "
+                    "Tüm giden trafiği Tor'a yönlendiren kill-switch, Tor çalışmazken "
+                    "sistemin tamamının internete erişimini keser ve açık bağlantıları "
+                    "düşürür. Bu nedenle önce Tor'un çalıştığı doğrulanmalıdır."
+                )
+                logger.error(message)
+                with self._lock:
+                    self.state["network_shield_active"] = False
+                    self.state["tor_active"] = False
+                return {
+                    "connected": False,
+                    "error": message,
+                    "tor_active": False,
+                    "firewall_active": False,
+                    "tor_check": tor_check,
+                    "mac_rolled_back": bool(mac_results),
+                    "timestamp": time.time(),
+                }
+
+        # 4. DNSCrypt ve systemd-resolved Kilidi
         dns_success = True
         if validated_net.get("dnscrypt_enabled", True):
             dns_res = self.dnscrypt_manager.apply_dns_lock()
             dns_success = dns_res.get("success", True)
 
-        # 4. nftables / iptables Güvenlik Duvarı Kuralları
+        # 5. GERÇEK portları Tor'dan oku. torrc yazılamamış olsa bile Tor
+        #    dağıtımın kendi yapılandırmasıyla çalışıyor olabilir (Kali'de
+        #    DNSPort 5353). Yapılandırma varsayılanına güvenip kural yazmak,
+        #    DNS'i ve TCP'yi ölü portlara yönlendirebilir.
+        trans_info = get_tor_listener_port(
+            "trans",
+            control_port=validated_net["tor_control_port"],
+            fallback=validated_net["tor_trans_port"],
+            label="TransPort",
+        )
+        dns_info = get_tor_listener_port(
+            "dns",
+            control_port=validated_net["tor_control_port"],
+            fallback=validated_net["tor_dns_port"],
+            label="DNSPort",
+        )
+        actual_ports = {
+            "trans": trans_info,
+            "dns": dns_info,
+            "socks": get_tor_listener_port(
+                "socks",
+                control_port=validated_net["tor_control_port"],
+                fallback=validated_net["tor_socks_port"],
+                label="SocksPort",
+            ),
+        }
+
+        # 6. nftables / iptables Güvenlik Duvarı Kuralları
         fw_success = self.firewall.apply_rules(
-            trans_port=validated_net["tor_trans_port"],
-            dns_port=validated_net["tor_dns_port"],
+            trans_port=trans_info["port"],
+            dns_port=dns_info["port"],
             block_doh=validated_net["block_doh"],
             drop_ipv6=validated_net["drop_ipv6"],
         )
+
+        # 7. UYGULAMA SONRASI GÜVENLİK AĞI: kurallar kurulduktan sonra Tor
+        #    üzerinden gerçek trafik akabiliyor mu? Akmıyorsa kullanıcıyı
+        #    karanlıkta bırakmak yerine kuralları hemen geri al.
+        if fw_success:
+            if not test_tor_circuit_socks(socks_port=actual_ports["socks"]["port"], timeout=8.0):
+                logger.error(
+                    "Kurallar uygulandıktan sonra Tor devresi doğrulanamadı; "
+                    "güvenlik duvarı geri alınıyor."
+                )
+                self.firewall.flush_rules()
+                self._rollback_connect(mac_results)
+                with self._lock:
+                    self.state["network_shield_active"] = False
+                    self.state["tor_active"] = False
+                return {
+                    "connected": False,
+                    "error": (
+                        "Ağ kalkanı kuruldu ancak Tor üzerinden trafik "
+                        "doğrulanamadı. Kurallar güvenliğiniz için otomatik "
+                        "olarak geri alındı; bağlantınız kesilmedi."
+                    ),
+                    "tor_active": False,
+                    "firewall_active": False,
+                    "tor_check": tor_check,
+                    "actual_ports": actual_ports,
+                    "mac_rolled_back": bool(mac_results),
+                    "timestamp": time.time(),
+                }
+
+        # Güvenlik duvarı kurulamadıysa MAC sahtelemesini geri al; aksi halde
+        # kullanıcı yarı uygulanmış bir korumayla kalır.
+        if not fw_success:
+            self._rollback_connect(mac_results)
 
         with self._lock:
             self.state["network_shield_active"] = fw_success
@@ -429,15 +582,52 @@ class RootDaemon:
             self.state["i2p_active"] = validated_net.get("i2p_enabled", False)
             logger.info("Ağ kalkanı aktifleştirildi (İstemci UID: %d).", uid)
 
+        # 8. MAC ADRESİ SAHTELEMESİ (EN SON ADIM)
+        #    Kalkan zaten kuruldu. MAC değişikliği ağı kısa süreliğine
+        #    düşürebilir; bu durumda yalnızca MAC geri alınır, kalkan korunur.
+        mac_rolled_back = False
+        if fw_success and validated_net.get("mac_randomize", True):
+            mac_results = self.mac_manager.randomize_all_physical_interfaces(
+                in_place=validated_net.get("mac_in_place", True)
+            )
+            if mac_results and not test_tor_circuit_socks(
+                socks_port=actual_ports["socks"]["port"], timeout=8.0
+            ):
+                logger.warning(
+                    "MAC değişikliği sonrası Tor devresi bozuldu; MAC adresleri "
+                    "geri alınıyor (ağ kalkanı korunuyor)."
+                )
+                self._rollback_connect(mac_results)
+                mac_rolled_back = True
+                mac_results = {}
+
         return {
             "connected": fw_success,
             "network_config": validated_net,
             "firewall_active": fw_success,
             "tor_active": tor_success,
+            "tor_check": tor_check,
+            "actual_ports": actual_ports,
             "dnscrypt_active": dns_success,
             "mac_randomized": mac_results,
+            "mac_rolled_back": mac_rolled_back,
             "timestamp": time.time(),
         }
+
+    def _rollback_connect(self, mac_results: Dict[str, Any]) -> None:
+        """Başarısız bağlantı denemesinde MAC adreslerini özgün hâline döndürür.
+
+        Yalnızca MAC sahtelemesinin bu daemon içinde gerçekleşmiş olması
+        durumunda geri alınır; `restore_all()` zaten `original_macs`
+        haritasındaki gerçek kayıtları kullanır.
+        """
+        if not mac_results:
+            return
+        try:
+            self.mac_manager.restore_all()
+            logger.info("MAC adresleri özgün hâline döndürüldü.")
+        except Exception as err:  # pragma: no cover - geri alma en iyi çabayla yapılır
+            logger.error("MAC adresleri geri alınamadı: %s", err)
 
     def _handle_disconnect(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Ağ kalkanını güvenle devreden çıkarır ve sistemi normale döndürür."""
@@ -612,7 +802,7 @@ class RootDaemon:
     # -------------------------------------------------------------------------
     def start(self) -> None:
         """Daemon sunucusunu başlatır ve bağlantıları dinlemeye başlar."""
-        logger.info("Linux FP Cleaner Root Daemon başlatılıyor (Sürüm: %s)...", DAEMON_VERSION)
+        logger.info("AnonVoid Root Daemon başlatılıyor (Sürüm: %s)...", DAEMON_VERSION)
 
         # 1. Başlangıçta kendini iyileştir
         self.startup_heal()

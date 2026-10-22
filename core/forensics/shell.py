@@ -18,7 +18,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import shred_file
 
-logger = logging.getLogger("FPCleanerShell")
+logger = logging.getLogger("AnonVoidShell")
 
 # Hedef Shell ve CLI Geçmiş Dosyaları (Kullanıcı Ev Dizinine Göreceli)
 SHELL_TARGET_FILES: List[str] = [

@@ -21,7 +21,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import sync_disks
 
-logger = logging.getLogger("FPCleanerStorage")
+logger = logging.getLogger("AnonVoidStorage")
 
 
 def detect_storage_devices() -> List[Dict[str, Any]]:

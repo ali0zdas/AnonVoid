@@ -22,7 +22,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.config import cfg_interface_name
 
-logger = logging.getLogger("FPCleanerMAC")
+logger = logging.getLogger("AnonVoidMAC")
 
 # Hariç Tutulacak Sanal ve Konteyner Arayüz Desenleri
 EXCLUDED_IFACE_PATTERNS = [

@@ -18,7 +18,7 @@ from typing import Any, Optional
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-logger = logging.getLogger("FPCleanerLowLevel")
+logger = logging.getLogger("AnonVoidLowLevel")
 
 # Linux libc kütüphanesi bağlantısı
 _libc: Optional[ctypes.CDLL] = None

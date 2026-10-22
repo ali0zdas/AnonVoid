@@ -24,7 +24,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.config import cfg_port
 
-logger = logging.getLogger("FPCleanerFirewall")
+logger = logging.getLogger("AnonVoidFirewall")
 
 # Tor .onion Sanal IP Alanı (10.192.0.0/10) Hariç Tutularak Bölünen LAN Ağları
 TOR_LOCAL_NETS: List[str] = [
@@ -46,7 +46,10 @@ DOH_SERVER_IPS: List[str] = [
     "208.67.222.222", "208.67.220.220",  # OpenDNS
 ]
 
-TABLE_NAME = "fp-cleaner"
+# nftables tablo adı. Eski sürümlerde "fp-cleaner" idi; daemon açılışta her iki
+# adı da temizlediği için yükseltme sırasında artık bırakılan tablolar silinir.
+TABLE_NAME = "anonvoid"
+LEGACY_TABLE_NAME = "fp-cleaner"
 
 
 def get_tor_uid() -> Optional[int]:
@@ -226,18 +229,20 @@ class FirewallEngine:
     def flush_rules(self) -> bool:
         """Tüm güvenlik duvarı kurallarını ve yönlendirmeleri sıfırlar."""
         logger.info("Güvenlik duvarı kuralları temizleniyor (flush)...")
-        # 1. nftables tablolarını sil
-        for family in ["inet", "ip6"]:
-            try:
-                subprocess.run(
-                    ["nft", "delete", "table", family, self.table_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                    check=False,
-                )
-            except Exception:
-                pass
+        # 1. nftables tablolarını sil (mevcut ad + eski "fp-cleaner" adı; yükseltme
+        # sırasında bırakılan eski tabloların trafiği tıkamasını önler)
+        for table_name in (self.table_name, LEGACY_TABLE_NAME):
+            for family in ["inet", "ip6"]:
+                try:
+                    subprocess.run(
+                        ["nft", "delete", "table", family, table_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                except Exception:
+                    pass
 
         # 2. iptables temizliği
         try:

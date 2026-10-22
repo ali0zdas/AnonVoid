@@ -19,7 +19,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.forensics.lowlevel import shred_file, sync_disks
 
-logger = logging.getLogger("FPCleanerCache")
+logger = logging.getLogger("AnonVoidCache")
 
 
 def get_xdg_paths(target_home: Optional[str] = None) -> Dict[str, str]:

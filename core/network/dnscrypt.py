@@ -20,11 +20,22 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from core.config import cfg_port
 
-logger = logging.getLogger("FPCleanerDNSCrypt")
+logger = logging.getLogger("AnonVoidDNSCrypt")
 
 DEFAULT_DNSCRYPT_PORT = 5380
 RESOLV_CONF_PATH = "/etc/resolv.conf"
-RESOLV_CONF_BACKUP = "/etc/resolv.conf.fp-cleaner.bak"
+RESOLV_CONF_BACKUP = "/etc/resolv.conf.anonvoid.bak"
+# Eski proje adından ("fp-cleaner") kalan yedekler. Üst üste yazılmaması için
+# varlıkları kontrol edilir; aksi halde orijinal resolv.conf kalıcı olarak kaybolur.
+RESOLV_CONF_LEGACY_BACKUPS = ("/etc/resolv.conf.fp-cleaner.bak",)
+
+
+def existing_resolv_backup() -> str:
+    """Geri yüklenecek geçerli resolv.conf yedeğinin yolunu döndürür (yoksa boş dize)."""
+    for path in (RESOLV_CONF_BACKUP, *RESOLV_CONF_LEGACY_BACKUPS):
+        if os.path.exists(path):
+            return path
+    return ""
 
 
 def is_dnscrypt_running() -> bool:
@@ -108,11 +119,11 @@ class DNSCryptManager:
         # 2. Fallback: /etc/resolv.conf dosyasını yedekle ve 127.0.0.1 yaz
         try:
             if os.path.exists(RESOLV_CONF_PATH) and not os.path.islink(RESOLV_CONF_PATH):
-                if not os.path.exists(RESOLV_CONF_BACKUP):
+                if not existing_resolv_backup():
                     shutil.copy2(RESOLV_CONF_PATH, RESOLV_CONF_BACKUP)
 
                 with open(RESOLV_CONF_PATH, "w", encoding="utf-8") as f:
-                    f.write(f"# Linux FP Cleaner DNSCrypt Kilidi\nnameserver 127.0.0.1\nport {self.port}\n")
+                    f.write(f"# AnonVoid DNSCrypt Kilidi\nnameserver 127.0.0.1\nport {self.port}\n")
 
                 result["success"] = True
                 logger.info("/etc/resolv.conf fallback üzerinden DNSCrypt soketine yönlendirildi.")
@@ -139,11 +150,17 @@ class DNSCryptManager:
             self._configured_interfaces.clear()
 
         # 2. /etc/resolv.conf yedeğini geri yükle
-        if os.path.exists(RESOLV_CONF_BACKUP):
+        backup = existing_resolv_backup()
+        if backup:
             try:
-                shutil.move(RESOLV_CONF_BACKUP, RESOLV_CONF_PATH)
+                shutil.move(backup, RESOLV_CONF_PATH)
                 logger.info("Orijinal /etc/resolv.conf geri yüklendi.")
             except Exception as err:
                 logger.warning("/etc/resolv.conf geri yüklenemedi: %s", err)
+        else:
+            logger.warning(
+                "Geri yüklenecek /etc/resolv.conf yedeği bulunamadı; "
+                "sistem DNS yapılandırması elle düzeltilmelidir."
+            )
 
         return success

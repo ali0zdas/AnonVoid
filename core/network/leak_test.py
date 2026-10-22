@@ -13,15 +13,26 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 import urllib.request
 from typing import Any, Dict, Optional
+
+from core.config import cfg_port
+from core.network.firewall import FirewallEngine
+from core.network.tor import check_tor_ready, get_tor_dns_port
+
+# Tor DNSPort bilinemezse kullanılacak son çare değer. Bu bir TAHMİN
+# DEĞİLDİR: gerçek port her zaman önce Tor kontrol portundan okunur.
+# Kalıcı olarak 5300 varsaymak, Kali gibi 5353 kullanan dağıtımlarda
+# sağlıklı bir Tor'u "DNS yanıt vermiyor" gibi gösterebilirdi.
+TOR_DNS_PORT_FALLBACK = 5300
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-logger = logging.getLogger("FPCleanerLeakTest")
+logger = logging.getLogger("AnonVoidLeakTest")
 
 TOR_CHECK_API = "https://check.torproject.org/api/ip"
 GOOGLE_STUN_SERVER = ("stun.l.google.com", 19302)
@@ -37,6 +48,15 @@ def test_tor_exit_ip(timeout: float = 8.0) -> Dict[str, Any]:
     }
 
     try:
+        # urllib'nin timeout değeri DNS çözümlemeyi kapsamaz. Kalkan etkinken
+        # çözümleme kara deliğinde kalabildiği için önce sınırlı çözümleme yapılır.
+        if resolve_with_deadline("check.torproject.org", timeout=timeout) is None:
+            result["error"] = (
+                "check.torproject.org çözümlenemedi (DNS engelli veya Tor DNSPort kapalı). "
+                "Tor üzerinden çıkış doğrulanamadı."
+            )
+            return result
+
         req = urllib.request.Request(
             TOR_CHECK_API,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"},
@@ -93,21 +113,124 @@ def test_ipv6_leak(timeout: float = 3.0) -> Dict[str, Any]:
     return result
 
 
+def resolve_with_deadline(host: str, timeout: float = 4.0) -> Optional[str]:
+    """Sistem çözümleyicisini kesin bir üst süreyle çağırır.
+
+    `socket.gethostbyname()` üzerinde hiçbir zaman aşımı yoktur; `/etc/resolv.conf`
+    içindeki `timeout`/`attempts` değerleri kadar bekler. AnonVoid kalkanı
+    etkinken tüm sorgular Tor DNSPort'a yönlendirildiği ve Tor DNSPort
+    kapalı olduğu için bu, sızıntı testinin istemci zaman aşımını aşarak
+    donmasına yol açar.
+
+    Bu nedenle çözümleme kısa ömürlü bir iş parçacığında yapılır ve ana iş
+    parçacığı `timeout` kadar bekler. Çözümleme takılı kalırsa iş parçacığı
+    arka planda çalışmaya devam eder; daemon kısa ömürlü süreçlerde sonlandığı
+    için kalıcı bir kaynak sızıntısı oluşmaz.
+    """
+    box: Dict[str, Optional[str]] = {}
+
+    def _resolve() -> None:
+        try:
+            box["ip"] = socket.gethostbyname(host)
+        except Exception:
+            box["ip"] = None
+
+    worker = threading.Thread(target=_resolve, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return box.get("ip")
+
+
 def test_dns_leak(timeout: float = 4.0) -> Dict[str, Any]:
-    """Yerel DNS sorgularının Tor DNSPort (127.0.0.1:5300) üzerinden geçip geçmediğini test eder."""
+    """Yerel DNS sorgularının Tor DNSPort üzerinden geçip geçmediğini test eder.
+
+    DNSPort sabit bir değere bağlı değildir: dağıtımın öntanımlı torrc'si
+    farklı bir port kullanabilir (Kali'de 5353). Yanlış port sorgulanırsa,
+    Tor tamamen sağlıklı olsa bile test "yanıt vermedi" der ve kullanıcı
+    hatalı yönlendirilir. Bu yüzden port önce Tor'un kontrol portundan
+    okunur, okunamazsa öntanımlı değere düşülür.
+    """
+    dns_listener = get_tor_dns_port(fallback=TOR_DNS_PORT_FALLBACK)
+    dns_port = dns_listener["port"]
+
     result: Dict[str, Any] = {
         "tor_dns_responsive": False,
         "resolved_ip": None,
         "error": None,
+        "dns_port": dns_port,
+        "dns_port_source": dns_listener["source"],
     }
 
+    # 1. Asıl test: Tor DNSPort'a doğrudan sorgu. Yalnızca bu yol kullanılırsa
+    #    DNS'in gerçekten şeffaf proxy üzerinden gittiği kanıtlanabilir.
+    dns_result = query_tor_dnsport(
+        "check.torproject.org", timeout=timeout, dns_port=dns_port
+    )
+    result["tor_dns_responsive"] = dns_result["responsive"]
+    result["resolved_ip"] = dns_result["ip"]
+    if not dns_result["responsive"]:
+        result["error"] = dns_result["error"]
+
+    # 2. Bilgi amaçlı: sistem çözümleyicisinin verdiği sonuç (sınırlandırılmış).
+    system_ip = resolve_with_deadline("check.torproject.org", timeout=timeout)
+    result["system_resolved_ip"] = system_ip
+    result["system_matches_tor"] = bool(system_ip and system_ip == dns_result["ip"])
+
+    return result
+
+
+def query_tor_dnsport(
+    hostname: str, timeout: float = 4.0, dns_port: int = TOR_DNS_PORT_FALLBACK
+) -> Dict[str, Any]:
+    """Tor DNSPort adresine doğrudan bir A kaydı sorgusu gönderir.
+
+    `dns_port` çağıran taraf tarafından belirlenir; sabit 5300 varsayımı
+    kaldırılmıştır çünkü dağıtım öntanımları farklı olabilir.
+    """
+    dns_port = cfg_port(dns_port, TOR_DNS_PORT_FALLBACK)
+    result: Dict[str, Any] = {"responsive": False, "ip": None, "error": None}
+
+    query_id = os.urandom(2)
+    # Başlık: Transaction ID, Bayraklar(RECURSION_DESIRED), QDCOUNT, diğerleri
+    header = query_id + b"\x01\x00" + b"\x00\x01" + b"\x00\x00\x00\x00\x00\x00"
+    qname = b"".join(bytes([len(part)]) + part.encode("ascii") for part in hostname.split("."))
+    packet = header + qname + b"\x00\x00\x01\x00\x01"
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
     try:
-        # Doğrudan soket üzerinden yerel DNS testi
-        resolved = socket.gethostbyname("check.torproject.org")
-        result["resolved_ip"] = resolved
-        result["tor_dns_responsive"] = bool(resolved)
-    except Exception as err:
-        result["error"] = f"DNS sorgusu başarısız: {err}"
+        sock.sendto(packet, ("127.0.0.1", dns_port))
+        data, _ = sock.recvfrom(2048)
+        if len(data) < 12 or data[:2] != query_id:
+            result["error"] = "DNSPort geçersiz yanıt döndürdü."
+            return result
+
+        rcode = data[3] & 0x0F
+        if rcode == 3:
+            result["responsive"] = True
+            result["error"] = "Tor DNSPort yanıtladı ancak kayıt bulunamadı (NXDOMAIN)."
+            return result
+        if rcode != 0:
+            result["error"] = f"Tor DNSPort hata kodu döndürdü: {rcode}"
+            return result
+
+        result["responsive"] = True
+        # Yanıtın son dört baytı, sıkıştırılmış değilse A kaydının adresidir.
+        if len(data) >= 16:
+            result["ip"] = ".".join(str(b) for b in data[-4:])
+    except socket.timeout:
+        result["error"] = (
+            f"Tor DNSPort (127.0.0.1:{dns_port}) yanıt vermedi; "
+            "Tor DNS yapılandırması etkin değil ya da DNSPort farklı bir "
+            "portta dinliyor."
+        )
+    except OSError as err:
+        result["error"] = f"Tor DNSPort'a ulaşılamadı: {err}"
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
 
     return result
 
@@ -123,6 +246,18 @@ def test_webrtc_udp_leak(timeout: float = 3.0) -> Dict[str, Any]:
         "message": "UDP/STUN trafiği engellendi (WebRTC Güvenli).",
     }
 
+    # Simple STUN sunucusunun adresi de çözümlenmelidir; UDP sendto çağrısındaki
+    # çözümleme soket zaman aşımından etkilenmez ve engellenmiş DNS'te asılı kalır.
+    stun_host, stun_port = GOOGLE_STUN_SERVER
+    stun_ip = resolve_with_deadline(stun_host, timeout=timeout)
+    if stun_ip is None:
+        result["message"] = (
+            "STUN sunucusu çözümlenemedi; test yapılamadı. "
+            "Bu, UDP kaçışı olmadığını kanıtlamaz."
+        )
+        result["indeterminate"] = True
+        return result
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
 
@@ -130,7 +265,7 @@ def test_webrtc_udp_leak(timeout: float = 3.0) -> Dict[str, Any]:
     stun_req = b"\x00\x01\x00\x00\x21\x12\xa4\x42" + os.urandom(12)
 
     try:
-        sock.sendto(stun_req, GOOGLE_STUN_SERVER)
+        sock.sendto(stun_req, (stun_ip, stun_port))
         data, _ = sock.recvfrom(1024)
         if data:
             result["leak_detected"] = True
@@ -181,11 +316,55 @@ def run_full_leak_test() -> Dict[str, Any]:
         and not webrtc_test["leak_detected"]
     )
 
+    # Kullanıcı "Tor çıkış IP'si doğru değil" gördüğünde NEDENINI bilmelidir.
+    # Üç ayrı durum birbirine çok benzer görünür ama tamamen farklıdır:
+    #   (a) Tor kurulu/çalışmıyor          -> önce Tor kurulmalı/başlatılmalı
+    #   (b) Tor ayakta ama bootstrap %<100 -> birkaç saniye beklenmeli
+    #   (c) Tor hazır ama kalkan kapalı    -> koruma etkinleştirilmeli
+    # (c) durumunda IPv4/IPv6 sızıntısı "gerçek sızıntı" değil, kalkanın
+    # kapalı olmasının beklenen sonucudur; bunu ayırt etmeden "sızıntı var"
+    # demek kullanıcıyı yanlış yönlendirir.
+    tor_diag = check_tor_ready(require_complete=False)
+    # Kalkan durumu yalnızca bir bayraktan değil, gerçek nftables tablosundan
+    # belirlenir: daemon çökmüş ya da kurallar elle silinmiş olabilir ve
+    # bayrak yanıltıcı biçimde "aktif" görünebilir.
+    shield_active = FirewallEngine().is_active()
+    if not tor_diag["process_running"]:
+        tor_hint = (
+            "Tor servisi çalışmıyor. Tor kurulu değil veya başlatılmamış. "
+            "Kalkan etkinleştirilmeden Tor çıkış IP'si doğal olarak gerçek IP'niz "
+            "görünür; bu bir sızıntı değil, kalkanın kapalı olduğunun göstergesidir."
+        )
+    elif tor_diag["bootstrap_percent"] is not None and tor_diag["bootstrap_percent"] < 100:
+        tor_hint = (
+            f"Tor bootstrap tamamlanmadı (%{tor_diag['bootstrap_percent']}). "
+            "Tor ilk açılışta güvenlik duvarı zincirini kurmadan önce devre "
+            "kurulana kadar beklenmelidir. Kalkan bu sırada kasıtlı olarak "
+            "kurulmaz, çünkü yarım kalmış bir Tor tüm trafiği karartır."
+        )
+    elif not shield_active:
+        tor_hint = (
+            "Tor çalışıyor ve hazır, ancak ağ kalkanı kapalı. Trafik şu anda "
+            "doğrudan gerçek IP'nizden çıkıyor. Korumayı etkinleştirdiğinizde "
+            "çıkış IP'si bir Tor çıkış düğümüne döner."
+        )
+    else:
+        tor_hint = (
+            "Tor ve kalkan etkin görünüyor. Çıkış düğümü hâlâ gerçek IP'nizi "
+            "gösteriyorsa nftables kuralları uygulanmamış olabilir."
+        )
+
     return {
         "timestamp": time.time(),
         "duration_sec": round(time.time() - start_time, 2),
         "is_fully_anonymous": is_fully_anonymous,
         "tor": tor_test,
+        "tor_diagnostics": {
+            "process_running": tor_diag["process_running"],
+            "bootstrap_percent": tor_diag["bootstrap_percent"],
+            "shield_active": shield_active,
+            "explanation": tor_hint,
+        },
         "ipv6": ipv6_test,
         "dns": dns_test,
         "webrtc": webrtc_test,

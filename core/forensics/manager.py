@@ -35,7 +35,7 @@ from core.forensics.package_mgr import (
 from core.forensics.shell import clean_shell_history
 from core.forensics.storage import run_ssd_trim, zero_free_space
 
-logger = logging.getLogger("FPCleanerForensicsManager")
+logger = logging.getLogger("AnonVoidForensicsManager")
 
 
 class ForensicsManager:
