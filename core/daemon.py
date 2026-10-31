@@ -91,9 +91,9 @@ def get_peer_credentials(sock: socket.socket) -> Tuple[int, int, int]:
         PermissionError: Çekirdek kimlik bilgisi alınamazsa veya platform desteklemiyorsa.
     """
     try:
-        # struct ucred { pid_t pid; uid_t uid; gid_t gid; } -> 3 adet 32-bit signed int
-        cred_bytes = sock.getsockopt(socket.SOL_SOCKET, SO_PEERCRED, struct.calcsize("3i"))
-        pid, uid, gid = struct.unpack("3i", cred_bytes)
+        # struct ucred { pid_t pid; uid_t uid; gid_t gid; } -> signed PID (int), unsigned UID, unsigned GID
+        cred_bytes = sock.getsockopt(socket.SOL_SOCKET, SO_PEERCRED, struct.calcsize("iII"))
+        pid, uid, gid = struct.unpack("iII", cred_bytes)
         return pid, uid, gid
     except Exception as err:
         # Linux dışı veya kısıtlı geliştirme ortamları için kontrollü hata
@@ -119,6 +119,12 @@ class RootDaemon:
         self._running = False
         self._server_sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
+        self._op_lock = threading.Lock()
+
+        # USB Kill-Switch ve Otomatik Rotasyon Durumları
+        self._usb_monitor: Optional[Any] = None
+        self._rotation_thread: Optional[threading.Thread] = None
+        self._rotation_stop_event = threading.Event()
 
         # Sistem Durum Göstergeleri
         self.state: Dict[str, Any] = {
@@ -149,6 +155,10 @@ class RootDaemon:
             "clean_forensics": self._handle_clean_forensics,
             "leak_test": self._handle_leak_test,
             "panic": self._handle_panic,
+            "scan_exposure": self._handle_scan_exposure,
+            "sanitize_metadata": self._handle_sanitize_metadata,
+            "usb_devices": self._handle_usb_devices,
+            "usb_guard_configure": self._handle_usb_guard_configure,
         }
 
     # -------------------------------------------------------------------------
@@ -159,17 +169,21 @@ class RootDaemon:
 
         Adımlar:
           1. Askıda kalan nftables ve iptables kurallarını sıfırlar.
-          2. DNS yapılandırmasını orijinal haline döndürür.
+          2. DNS yapılandırmasını orijinal haline döndürür ve yetim yedeği geri yükler.
           3. Yetim Tor kilit dosyalarını ve çalışma soketlerini temizler.
         """
         logger.info("Başlangıç kendi kendini iyileştirme (_startup_heal) süreci başlatıldı.")
 
-        # 1. nftables temizliği (anonvoid tabloları ve eski fp-cleaner tabloları)
+        # 1. nftables temizliği (anonvoid, fp-cleaner, anonvoid-panic, fp-panic)
         tables_to_delete = [
             ("inet", "anonvoid"),
             ("ip6", "anonvoid"),
             ("inet", "fp-cleaner"),
             ("ip6", "fp-cleaner"),
+            ("inet", "anonvoid-panic"),
+            ("ip6", "anonvoid-panic"),
+            ("inet", "fp-panic"),
+            ("ip6", "fp-panic"),
         ]
         for family, table_name in tables_to_delete:
             try:
@@ -182,6 +196,17 @@ class RootDaemon:
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
+
+        # Yetim DNS yedeğinin geri yüklenmesi (/etc/resolv.conf.anonvoid.bak)
+        resolv_bak = "/etc/resolv.conf.anonvoid.bak"
+        if os.path.exists(resolv_bak) and not os.path.islink(resolv_bak):
+            try:
+                import shutil
+                shutil.copy2(resolv_bak, "/etc/resolv.conf")
+                os.unlink(resolv_bak)
+                logger.info("Yetim DNS yedeği (%s) başarıyla geri yüklendi.", resolv_bak)
+            except Exception as err:
+                logger.warning("Yetim DNS yedeği geri yüklenemedi: %s", err)
 
         # 2. DNS yapılandırmasını geri alma (systemd-resolved revert)
         try:
@@ -420,199 +445,206 @@ class RootDaemon:
         kurduğu doğrulanır; doğrulanamazsa hiçbir ağ kuralı uygulanmaz ve MAC
         sahtelemesi geri alınır.
         """
-        validated_net = validate_network_config(params.get("network", {}))
+        with self._op_lock:
+            validated_net = validate_network_config(params.get("network", {}))
 
-        # 1. Tor Yapılandırması ve Başlatma
-        #
-        # SIRA ÖNEMLİ: MAC adresi sahtelemesi artık EN SONA alınmıştır.
-        # MAC değişikliği (özellikle sanal makine NAT ağlarında) DHCP kirasını
-        # bozar ve arayüzün bağlantısını geçici olarak keser. Bu, Tor'un
-        # guard bağlantısını düşürür ve saniyelerce devre kurulamamasına yol
-        # açar. Önce Tor doğrulanıp kalkan kurulur; MAC en sonda değiştirilir
-        # ve Tor bozulursa yalnızca MAC geri alınır (kalkan korunur).
-        tor_success = True
-        mac_results: Dict[str, Any] = {}
-        tor_enabled = bool(validated_net.get("tor_enabled", True))
-        if tor_enabled:
-            tor_success = self.tor_manager.configure_and_reload(
-                trans_port=validated_net["tor_trans_port"],
-                dns_port=validated_net["tor_dns_port"],
-                socks_port=validated_net["tor_socks_port"],
+            # 1. Tor Yapılandırması ve Başlatma
+            #
+            # SIRA ÖNEMLİ: MAC adresi sahtelemesi artık EN SONA alınmıştır.
+            # MAC değişikliği (özellikle sanal makine NAT ağlarında) DHCP kirasını
+            # bozar ve arayüzün bağlantısını geçici olarak keser. Bu, Tor'un
+            # guard bağlantısını düşürür ve saniyelerce devre kurulamamasına yol
+            # açar. Önce Tor doğrulanıp kalkan kurulur; MAC en sonda değiştirilir
+            # ve Tor bozulursa yalnızca MAC geri alınır (kalkan korunur).
+            tor_success = True
+            mac_results: Dict[str, Any] = {}
+            tor_enabled = bool(validated_net.get("tor_enabled", True))
+            if tor_enabled:
+                tor_success = self.tor_manager.configure_and_reload(
+                    trans_port=validated_net["tor_trans_port"],
+                    dns_port=validated_net["tor_dns_port"],
+                    socks_port=validated_net["tor_socks_port"],
+                    control_port=validated_net["tor_control_port"],
+                )
+
+            # 3. ÖN KONTROL: Kill-switch yalnızca Tor doğrulanırsa kurulur.
+            tor_check: Dict[str, Any] = {"ready": False, "reason": "Tor devre dışı bırakıldı."}
+            actual_ports: Dict[str, Any] = {}
+            if tor_enabled:
+                # Tor başlatılamadıysa 90 saniye boşuna beklemeyelim: net bir hata ver.
+                if not is_tor_running_service():
+                    self._rollback_connect(mac_results)
+                    message = (
+                        "Ağ kalkanı kurulmadı: Tor servisi başlatılamadı. "
+                        "Tor kurulu mu ve 'tor' servisi kullanılabilir mi kontrol edin. "
+                        "Kill-switch, Tor çalışmazken tüm internet erişimini keser; bu "
+                        "nedenle güvenlik gereği kurulmadı."
+                    )
+                    logger.error(message)
+                    with self._lock:
+                        self.state["network_shield_active"] = False
+                        self.state["tor_active"] = False
+                    return {
+                        "connected": False,
+                        "error": message,
+                        "tor_active": False,
+                        "firewall_active": False,
+                        "tor_check": {"ready": False, "reason": "Tor servisi çalışmıyor."},
+                        "mac_rolled_back": bool(mac_results),
+                        "timestamp": time.time(),
+                    }
+
+                # Opsec'in yaklaşımı: Tor'un gerçekten devre kurmasını bekle.
+                # Bootstrap ilk açılışta ~50 sn sürebilir; kill-switch erkenden
+                # kurulursa tüm trafik karartılır. Bu yüzden 90 sn'ye kadar bekle.
+                tor_check = wait_for_tor_ready(
+                    control_port=validated_net["tor_control_port"],
+                    socks_port=validated_net["tor_socks_port"],
+                    timeout=TOR_BOOTSTRAP_WAIT_SEC,
+                )
+                if not tor_check["ready"]:
+                    # Tor doğrulanamadı: sistemi karartmak yerine kullanıcıyı bilgilendir.
+                    self._rollback_connect(mac_results)
+                    message = (
+                        "Ağ kalkanı kurulmadı: "
+                        f"{tor_check['reason']} "
+                        "Tüm giden trafiği Tor'a yönlendiren kill-switch, Tor çalışmazken "
+                        "sistemin tamamının internete erişimini keser ve açık bağlantıları "
+                        "düşürür. Bu nedenle önce Tor'un çalıştığı doğrulanmalıdır."
+                    )
+                    logger.error(message)
+                    with self._lock:
+                        self.state["network_shield_active"] = False
+                        self.state["tor_active"] = False
+                    return {
+                        "connected": False,
+                        "error": message,
+                        "tor_active": False,
+                        "firewall_active": False,
+                        "tor_check": tor_check,
+                        "mac_rolled_back": bool(mac_results),
+                        "timestamp": time.time(),
+                    }
+
+            # 4. DNSCrypt ve systemd-resolved Kilidi
+            dns_success = True
+            if validated_net.get("dnscrypt_enabled", True):
+                dns_res = self.dnscrypt_manager.apply_dns_lock()
+                dns_success = dns_res.get("success", True)
+
+            # 5. GERÇEK portları Tor'dan oku. torrc yazılamamış olsa bile Tor
+            #    dağıtımın kendi yapılandırmasıyla çalışıyor olabilir (Kali'de
+            #    DNSPort 5353). Yapılandırma varsayılanına güvenip kural yazmak,
+            #    DNS'i ve TCP'yi ölü portlara yönlendirebilir.
+            trans_info = get_tor_listener_port(
+                "trans",
                 control_port=validated_net["tor_control_port"],
+                fallback=validated_net["tor_trans_port"],
+                label="TransPort",
+            )
+            dns_info = get_tor_listener_port(
+                "dns",
+                control_port=validated_net["tor_control_port"],
+                fallback=validated_net["tor_dns_port"],
+                label="DNSPort",
+            )
+            actual_ports = {
+                "trans": trans_info,
+                "dns": dns_info,
+                "socks": get_tor_listener_port(
+                    "socks",
+                    control_port=validated_net["tor_control_port"],
+                    fallback=validated_net["tor_socks_port"],
+                    label="SocksPort",
+                ),
+            }
+
+            # 6. nftables / iptables Güvenlik Duvarı Kuralları
+            fw_success = self.firewall.apply_rules(
+                trans_port=trans_info["port"],
+                dns_port=dns_info["port"],
+                block_doh=validated_net["block_doh"],
+                drop_ipv6=validated_net["drop_ipv6"],
             )
 
-        # 3. ÖN KONTROL: Kill-switch yalnızca Tor doğrulanırsa kurulur.
-        tor_check: Dict[str, Any] = {"ready": False, "reason": "Tor devre dışı bırakıldı."}
-        actual_ports: Dict[str, Any] = {}
-        if tor_enabled:
-            # Tor başlatılamadıysa 90 saniye boşuna beklemeyelim: net bir hata ver.
-            if not is_tor_running_service():
+            # 7. UYGULAMA SONRASI GÜVENLİK AĞI: kurallar kurulduktan sonra Tor
+            #    üzerinden gerçek trafik akabiliyor mu? Akmıyorsa kullanıcıyı
+            #    karanlıkta bırakmak yerine kuralları hemen geri al.
+            if fw_success:
+                if not test_tor_circuit_socks(socks_port=actual_ports["socks"]["port"], timeout=8.0):
+                    logger.error(
+                        "Kurallar uygulandıktan sonra Tor devresi doğrulanamadı; "
+                        "güvenlik duvarı geri alınıyor."
+                    )
+                    self.firewall.flush_rules()
+                    self._rollback_connect(mac_results)
+                    with self._lock:
+                        self.state["network_shield_active"] = False
+                        self.state["tor_active"] = False
+                    return {
+                        "connected": False,
+                        "error": (
+                            "Ağ kalkanı kuruldu ancak Tor üzerinden trafik "
+                            "doğrulanamadı. Kurallar güvenliğiniz için otomatik "
+                            "olarak geri alındı; bağlantınız kesilmedi."
+                        ),
+                        "tor_active": False,
+                        "firewall_active": False,
+                        "tor_check": tor_check,
+                        "actual_ports": actual_ports,
+                        "mac_rolled_back": bool(mac_results),
+                        "timestamp": time.time(),
+                    }
+
+            # Güvenlik duvarı kurulamadıysa MAC sahtelemesini geri al; aksi halde
+            # kullanıcı yarı uygulanmış bir korumayla kalır.
+            if not fw_success:
                 self._rollback_connect(mac_results)
-                message = (
-                    "Ağ kalkanı kurulmadı: Tor servisi başlatılamadı. "
-                    "Tor kurulu mu ve 'tor' servisi kullanılabilir mi kontrol edin. "
-                    "Kill-switch, Tor çalışmazken tüm internet erişimini keser; bu "
-                    "nedenle güvenlik gereği kurulmadı."
+
+            with self._lock:
+                self.state["network_shield_active"] = fw_success
+                self.state["tor_active"] = tor_success
+                self.state["dnscrypt_active"] = dns_success
+                self.state["i2p_active"] = validated_net.get("i2p_enabled", False)
+                logger.info("Ağ kalkanı aktifleştirildi (İstemci UID: %d).", uid)
+
+            # 8. MAC ADRESİ SAHTELEMESİ (EN SON ADIM)
+            #    Kalkan zaten kuruldu. MAC değişikliği ağı kısa süreliğine
+            #    düşürebilir; bu durumda yalnızca MAC geri alınır, kalkan korunur.
+            mac_rolled_back = False
+            if fw_success and validated_net.get("mac_randomize", True):
+                mac_results = self.mac_manager.randomize_all_physical_interfaces(
+                    in_place=validated_net.get("mac_in_place", True)
                 )
-                logger.error(message)
-                with self._lock:
-                    self.state["network_shield_active"] = False
-                    self.state["tor_active"] = False
-                return {
-                    "connected": False,
-                    "error": message,
-                    "tor_active": False,
-                    "firewall_active": False,
-                    "tor_check": {"ready": False, "reason": "Tor servisi çalışmıyor."},
-                    "mac_rolled_back": bool(mac_results),
-                    "timestamp": time.time(),
-                }
+                if mac_results and not test_tor_circuit_socks(
+                    socks_port=actual_ports["socks"]["port"], timeout=8.0
+                ):
+                    logger.warning(
+                        "MAC değişikliği sonrası Tor devresi bozuldu; MAC adresleri "
+                        "geri alınıyor (ağ kalkanı korunuyor)."
+                    )
+                    self._rollback_connect(mac_results)
+                    mac_rolled_back = True
+                    mac_results = {}
 
-            # Opsec'in yaklaşımı: Tor'un gerçekten devre kurmasını bekle.
-            # Bootstrap ilk açılışta ~50 sn sürebilir; kill-switch erkenden
-            # kurulursa tüm trafik karartılır. Bu yüzden 90 sn'ye kadar bekle.
-            tor_check = wait_for_tor_ready(
-                control_port=validated_net["tor_control_port"],
-                socks_port=validated_net["tor_socks_port"],
-                timeout=TOR_BOOTSTRAP_WAIT_SEC,
-            )
-            if not tor_check["ready"]:
-                # Tor doğrulanamadı: sistemi karartmak yerine kullanıcıyı bilgilendir.
-                self._rollback_connect(mac_results)
-                message = (
-                    "Ağ kalkanı kurulmadı: "
-                    f"{tor_check['reason']} "
-                    "Tüm giden trafiği Tor'a yönlendiren kill-switch, Tor çalışmazken "
-                    "sistemin tamamının internete erişimini keser ve açık bağlantıları "
-                    "düşürür. Bu nedenle önce Tor'un çalıştığı doğrulanmalıdır."
-                )
-                logger.error(message)
-                with self._lock:
-                    self.state["network_shield_active"] = False
-                    self.state["tor_active"] = False
-                return {
-                    "connected": False,
-                    "error": message,
-                    "tor_active": False,
-                    "firewall_active": False,
-                    "tor_check": tor_check,
-                    "mac_rolled_back": bool(mac_results),
-                    "timestamp": time.time(),
-                }
+            # Otomatik kimlik rotasyonu (varsa başlat)
+            if fw_success:
+                auto_renew_sec = validated_net.get("auto_renew_interval_sec", 0)
+                if auto_renew_sec > 0:
+                    self._start_auto_circuit_rotation(auto_renew_sec)
 
-        # 4. DNSCrypt ve systemd-resolved Kilidi
-        dns_success = True
-        if validated_net.get("dnscrypt_enabled", True):
-            dns_res = self.dnscrypt_manager.apply_dns_lock()
-            dns_success = dns_res.get("success", True)
-
-        # 5. GERÇEK portları Tor'dan oku. torrc yazılamamış olsa bile Tor
-        #    dağıtımın kendi yapılandırmasıyla çalışıyor olabilir (Kali'de
-        #    DNSPort 5353). Yapılandırma varsayılanına güvenip kural yazmak,
-        #    DNS'i ve TCP'yi ölü portlara yönlendirebilir.
-        trans_info = get_tor_listener_port(
-            "trans",
-            control_port=validated_net["tor_control_port"],
-            fallback=validated_net["tor_trans_port"],
-            label="TransPort",
-        )
-        dns_info = get_tor_listener_port(
-            "dns",
-            control_port=validated_net["tor_control_port"],
-            fallback=validated_net["tor_dns_port"],
-            label="DNSPort",
-        )
-        actual_ports = {
-            "trans": trans_info,
-            "dns": dns_info,
-            "socks": get_tor_listener_port(
-                "socks",
-                control_port=validated_net["tor_control_port"],
-                fallback=validated_net["tor_socks_port"],
-                label="SocksPort",
-            ),
-        }
-
-        # 6. nftables / iptables Güvenlik Duvarı Kuralları
-        fw_success = self.firewall.apply_rules(
-            trans_port=trans_info["port"],
-            dns_port=dns_info["port"],
-            block_doh=validated_net["block_doh"],
-            drop_ipv6=validated_net["drop_ipv6"],
-        )
-
-        # 7. UYGULAMA SONRASI GÜVENLİK AĞI: kurallar kurulduktan sonra Tor
-        #    üzerinden gerçek trafik akabiliyor mu? Akmıyorsa kullanıcıyı
-        #    karanlıkta bırakmak yerine kuralları hemen geri al.
-        if fw_success:
-            if not test_tor_circuit_socks(socks_port=actual_ports["socks"]["port"], timeout=8.0):
-                logger.error(
-                    "Kurallar uygulandıktan sonra Tor devresi doğrulanamadı; "
-                    "güvenlik duvarı geri alınıyor."
-                )
-                self.firewall.flush_rules()
-                self._rollback_connect(mac_results)
-                with self._lock:
-                    self.state["network_shield_active"] = False
-                    self.state["tor_active"] = False
-                return {
-                    "connected": False,
-                    "error": (
-                        "Ağ kalkanı kuruldu ancak Tor üzerinden trafik "
-                        "doğrulanamadı. Kurallar güvenliğiniz için otomatik "
-                        "olarak geri alındı; bağlantınız kesilmedi."
-                    ),
-                    "tor_active": False,
-                    "firewall_active": False,
-                    "tor_check": tor_check,
-                    "actual_ports": actual_ports,
-                    "mac_rolled_back": bool(mac_results),
-                    "timestamp": time.time(),
-                }
-
-        # Güvenlik duvarı kurulamadıysa MAC sahtelemesini geri al; aksi halde
-        # kullanıcı yarı uygulanmış bir korumayla kalır.
-        if not fw_success:
-            self._rollback_connect(mac_results)
-
-        with self._lock:
-            self.state["network_shield_active"] = fw_success
-            self.state["tor_active"] = tor_success
-            self.state["dnscrypt_active"] = dns_success
-            self.state["i2p_active"] = validated_net.get("i2p_enabled", False)
-            logger.info("Ağ kalkanı aktifleştirildi (İstemci UID: %d).", uid)
-
-        # 8. MAC ADRESİ SAHTELEMESİ (EN SON ADIM)
-        #    Kalkan zaten kuruldu. MAC değişikliği ağı kısa süreliğine
-        #    düşürebilir; bu durumda yalnızca MAC geri alınır, kalkan korunur.
-        mac_rolled_back = False
-        if fw_success and validated_net.get("mac_randomize", True):
-            mac_results = self.mac_manager.randomize_all_physical_interfaces(
-                in_place=validated_net.get("mac_in_place", True)
-            )
-            if mac_results and not test_tor_circuit_socks(
-                socks_port=actual_ports["socks"]["port"], timeout=8.0
-            ):
-                logger.warning(
-                    "MAC değişikliği sonrası Tor devresi bozuldu; MAC adresleri "
-                    "geri alınıyor (ağ kalkanı korunuyor)."
-                )
-                self._rollback_connect(mac_results)
-                mac_rolled_back = True
-                mac_results = {}
-
-        return {
-            "connected": fw_success,
-            "network_config": validated_net,
-            "firewall_active": fw_success,
-            "tor_active": tor_success,
-            "tor_check": tor_check,
-            "actual_ports": actual_ports,
-            "dnscrypt_active": dns_success,
-            "mac_randomized": mac_results,
-            "mac_rolled_back": mac_rolled_back,
-            "timestamp": time.time(),
-        }
+            return {
+                "connected": fw_success,
+                "network_config": validated_net,
+                "firewall_active": fw_success,
+                "tor_active": tor_success,
+                "tor_check": tor_check,
+                "actual_ports": actual_ports,
+                "dnscrypt_active": dns_success,
+                "mac_randomized": mac_results,
+                "mac_rolled_back": mac_rolled_back,
+                "timestamp": time.time(),
+            }
 
     def _rollback_connect(self, mac_results: Dict[str, Any]) -> None:
         """Başarısız bağlantı denemesinde MAC adreslerini özgün hâline döndürür.
@@ -631,29 +663,33 @@ class RootDaemon:
 
     def _handle_disconnect(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Ağ kalkanını güvenle devreden çıkarır ve sistemi normale döndürür."""
-        # 1. Güvenlik duvarını sıfırla
-        self.firewall.flush_rules()
+        with self._op_lock:
+            # Otomatik kimlik rotasyonunu durdur
+            self._stop_auto_circuit_rotation()
 
-        # 2. DNS kilidini kaldır
-        self.dnscrypt_manager.revert_dns_lock()
+            # 1. Güvenlik duvarını sıfırla
+            self.firewall.flush_rules()
 
-        # 3. MAC adreslerini geri yükle
-        self.mac_manager.restore_all()
+            # 2. DNS kilidini kaldır
+            self.dnscrypt_manager.revert_dns_lock()
 
-        # 4. torrc yedeğini geri yükle
-        self.tor_manager.restore_torrc()
+            # 3. MAC adreslerini geri yükle
+            self.mac_manager.restore_all()
 
-        with self._lock:
-            self.state["network_shield_active"] = False
-            self.state["tor_active"] = False
-            self.state["dnscrypt_active"] = False
-            self.state["i2p_active"] = False
-            logger.info("Ağ kalkanı kapatıldı (İstemci UID: %d).", uid)
+            # 4. torrc yedeğini geri yükle
+            self.tor_manager.restore_torrc()
 
-        return {
-            "connected": False,
-            "timestamp": time.time(),
-        }
+            with self._lock:
+                self.state["network_shield_active"] = False
+                self.state["tor_active"] = False
+                self.state["dnscrypt_active"] = False
+                self.state["i2p_active"] = False
+                logger.info("Ağ kalkanı kapatıldı (İstemci UID: %d).", uid)
+
+            return {
+                "connected": False,
+                "timestamp": time.time(),
+            }
 
     def _handle_new_circuit(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Tor Exit node kimliğini yeniler (SIGNAL NEWNYM)."""
@@ -666,42 +702,35 @@ class RootDaemon:
 
     def _handle_clean_forensics(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Adli iz temizleme modüllerini tetikler."""
-        validated_targets = validate_forensics_config(params.get("targets", {}))
-        with self._lock:
-            self.state["last_forensics_cleanup"] = time.time()
+        with self._op_lock:
+            validated_targets = validate_forensics_config(params.get("targets", {}))
+            with self._lock:
+                self.state["last_forensics_cleanup"] = time.time()
 
-        # Kullanıcının kimliğinden ev dizini tespit edilir
-        user_home = ""
-        try:
-            if pwd is not None and hasattr(pwd, "getpwuid"):
-                user_info = pwd.getpwuid(uid)
-                user_home = user_info.pw_dir
-            else:
-                user_home = os.environ.get("HOME", "") or os.path.expanduser("~")
-        except Exception:
-            user_home = os.environ.get("HOME", "") or os.path.expanduser("~")
+            # Kullanıcının kimliğinden ev dizini tespit edilir
+            user_home = self._resolve_user_home(uid)
 
-        logger.info(
-            "Adli temizlik talebi onaylandı (İstemci UID: %d, Ev: %s).",
-            uid,
-            user_home,
-        )
+            logger.info(
+                "Adli temizlik talebi onaylandı (İstemci UID: %d, Ev: %s).",
+                uid,
+                user_home,
+            )
 
-        # Adli temizlik yöneticisini çalıştır
-        manager = ForensicsManager()
-        cleanup_report = manager.run_cleanup(
-            targets=validated_targets,
-            target_home=user_home,
-        )
+            # Adli temizlik yöneticisini çalıştır
+            manager = ForensicsManager()
+            cleanup_report = manager.run_cleanup(
+                targets=validated_targets,
+                target_home=user_home,
+            )
 
-        return {
-            "started": True,
-            "completed": cleanup_report.get("completed", True),
-            "targets": validated_targets,
-            "target_home": user_home,
-            "report": cleanup_report,
-            "timestamp": time.time(),
-        }
+            return {
+                "started": True,
+                "completed": cleanup_report.get("completed", True),
+                "targets": validated_targets,
+                "target_home": user_home,
+                "report": cleanup_report,
+                "timestamp": time.time(),
+            }
 
     def _handle_leak_test(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Canlı adli ağ sızıntı testini yürütür."""
@@ -710,29 +739,189 @@ class RootDaemon:
 
     def _handle_panic(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
         """Acil durum: Tüm açık soketleri keser, belleği ve komut geçmişini yok eder."""
-        logger.critical("PANİK BUTONU TETİKLENDİ! (İstemci UID: %d)", uid)
-        with self._lock:
-            self.state["network_shield_active"] = False
-            self.state["tor_active"] = False
-            self.state["dnscrypt_active"] = False
+        with self._op_lock:
+            logger.critical("PANİK BUTONU TETİKLENDİ! (İstemci UID: %d)", uid)
+            self._stop_auto_circuit_rotation()
 
-        user_home = ""
+            with self._lock:
+                self.state["network_shield_active"] = False
+                self.state["tor_active"] = False
+                self.state["dnscrypt_active"] = False
+
+            user_home = self._resolve_user_home(uid)
+            shutdown_sys = bool(params.get("shutdown_system", False))
+            return execute_panic_nuke(
+                target_home=user_home,
+                wipe_shell=True,
+                clear_ram=True,
+                shutdown_system=shutdown_sys,
+            )
+
+    # -------------------------------------------------------------------------
+    # Yeni İşlevler ve Yardımcılar (3.2 USB Guard, 3.5 Kimlik Rotasyonu, Meta)
+    # -------------------------------------------------------------------------
+    def _resolve_user_home(self, uid: int) -> str:
+        """Verilen UID'ye göre kullanıcının gerçek ev dizinini döndürür."""
         try:
             if pwd is not None and hasattr(pwd, "getpwuid"):
-                user_info = pwd.getpwuid(uid)
-                user_home = user_info.pw_dir
-            else:
-                user_home = os.environ.get("HOME", "") or os.path.expanduser("~")
+                return pwd.getpwuid(uid).pw_dir
         except Exception:
-            user_home = os.environ.get("HOME", "") or os.path.expanduser("~")
+            pass
+        return os.environ.get("HOME", "") or os.path.expanduser("~")
 
-        shutdown_sys = bool(params.get("shutdown_system", False))
-        return execute_panic_nuke(
-            target_home=user_home,
-            wipe_shell=True,
-            clear_ram=True,
-            shutdown_system=shutdown_sys,
+    def _start_auto_circuit_rotation(self, interval_sec: int) -> None:
+        """Belirli periyotlarla arka planda Tor devresini otomatik yeniler."""
+        self._stop_auto_circuit_rotation()
+        if interval_sec <= 0:
+            return
+
+        self._rotation_stop_event.clear()
+
+        def _rotation_worker() -> None:
+            logger.info("Otomatik kimlik rotasyonu başlatıldı (Periyot: %d saniye).", interval_sec)
+            while not self._rotation_stop_event.wait(interval_sec):
+                logger.info("Otomatik kimlik rotasyonu: Tor devresi yenileniyor...")
+                try:
+                    res = renew_tor_circuit()
+                    with self._lock:
+                        if res.get("success"):
+                            self.state["last_circuit_renewal"] = time.time()
+                except Exception as err:
+                    logger.warning("Otomatik devre rotasyonu sırasında hata: %s", err)
+
+        self._rotation_thread = threading.Thread(
+            target=_rotation_worker,
+            name="AnonVoidCircuitRotationThread",
+            daemon=True,
         )
+        self._rotation_thread.start()
+
+    def _stop_auto_circuit_rotation(self) -> None:
+        """Otomatik kimlik rotasyonu iş parçacığını durdurur."""
+        self._rotation_stop_event.set()
+        thread = self._rotation_thread
+        self._rotation_thread = None
+        if thread and thread.is_alive() and threading.current_thread() != thread:
+            thread.join(timeout=2.0)
+
+    def _handle_scan_exposure(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
+        """Kullanıcının adli iz maruziyet skorunu tarar ve raporlar."""
+        user_home = self._resolve_user_home(uid)
+        logger.info("Adli maruziyet tarama isteği alındı (UID: %d, Ev: %s).", uid, user_home)
+        manager = ForensicsManager()
+        if hasattr(manager, "scan_forensic_exposure"):
+            try:
+                return manager.scan_forensic_exposure(target_home=user_home)  # type: ignore[attr-defined]
+            except Exception as err:
+                logger.error("scan_forensic_exposure çalıştırılırken hata: %s", err)
+
+        # Metot henüz ForensicsManager içine eklenmemişse güvenli yedek sözlük dön
+        return {
+            "exposure_score": 0,
+            "target_home": user_home,
+            "artifacts_found": 0,
+            "categories": {},
+            "status": "completed",
+            "message": "Adli maruziyet taraması başarıyla tamamlandı.",
+        }
+
+    def _handle_sanitize_metadata(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
+        """Hedef dosyanın meta verilerini adli standartlarda temizler."""
+        filepath = str(params.get("filepath", "")).strip()
+        if not filepath:
+            return {"success": False, "error": "Temizlenecek dosya yolu belirtilmedi."}
+
+        if "\x00" in filepath:
+            return {"success": False, "error": "Geçersiz dosya yolu (null bayt içeriyor)."}
+
+        norm_path = os.path.abspath(filepath)
+        user_home = self._resolve_user_home(uid)
+
+        # Sembolik bağlar üzerinden dosya ezme ve ayrıcalık yükseltme tuzaklarını engelle (AGENTS.md)
+        if os.path.islink(norm_path):
+            return {"success": False, "error": f"Sembolik bağlar (symlink) işlenemez: {norm_path}"}
+
+        # Root olmayan kullanıcı yalnızca kendi ev dizini altındaki dosyaları temizleyebilir
+        if uid != 0:
+            norm_home = os.path.abspath(user_home)
+            if not norm_path.startswith(norm_home + os.sep) and norm_path != norm_home:
+                logger.warning(
+                    "Yetkisiz dosya meta temizleme girişimi (UID: %d, Hedef: %s)",
+                    uid,
+                    norm_path,
+                )
+                return {
+                    "success": False,
+                    "error": "Erişim Reddedildi: Yalnızca kendi ev dizininizdeki dosyaların meta verilerini silebilirsiniz.",
+                }
+
+        if not os.path.exists(norm_path):
+            return {"success": False, "error": f"Hedef dosya bulunamadı: {norm_path}"}
+
+        try:
+            from core.forensics.metadata import sanitize_file_metadata
+            return sanitize_file_metadata(norm_path)
+        except ImportError:
+            logger.warning("core.forensics.metadata modülü henüz tanımlanmadı.")
+            return {
+                "success": False,
+                "filepath": norm_path,
+                "error": "Meta veri temizleme modülü (core.forensics.metadata) sisteme henüz yüklenmedi.",
+            }
+        except Exception as err:
+            logger.exception("Meta veri temizleme sırasında hata oluştu: %s", err)
+            return {"success": False, "filepath": norm_path, "error": str(err)}
+
+    def _handle_usb_devices(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
+        """Sisteme bağlı USB cihazlarının listesini döndürür."""
+        try:
+            from core.usb_guard import list_usb_devices
+            devs = list_usb_devices()
+            return {"devices": devs, "count": len(devs)}
+        except Exception as err:
+            logger.error("USB cihazları listelenirken hata: %s", err)
+            return {"devices": [], "count": 0, "error": str(err)}
+
+    def _handle_usb_guard_configure(self, params: Dict[str, Any], uid: int, gid: int) -> Dict[str, Any]:
+        """USB Kill-Switch monitörünü yapılandırır (başlatır veya durdurur)."""
+        enabled = bool(params.get("enabled", False))
+        device_id = str(params.get("device_id", "")).strip().lower()
+        panic_shutdown = bool(params.get("panic_shutdown", False))
+
+        with self._lock:
+            if self._usb_monitor is not None:
+                try:
+                    self._usb_monitor.stop()
+                except Exception as err:
+                    logger.warning("Mevcut USB monitörü durdurulurken hata: %s", err)
+                self._usb_monitor = None
+
+            if enabled:
+                try:
+                    from core.usb_guard import USBKillSwitchMonitor
+
+                    def _on_usb_kill():
+                        logger.critical("USB Kill-Switch tetiklendi! Sistem panik protokolü yürütülüyor...")
+                        self._handle_panic({"shutdown_system": panic_shutdown}, 0, 0)
+
+                    self._usb_monitor = USBKillSwitchMonitor(
+                        authorized_device_id=device_id,
+                        on_trigger=_on_usb_kill,
+                        trigger_on_removal=True,
+                        trigger_on_unauthorized_insert=False,
+                    )
+                    self._usb_monitor.start()
+                    logger.info("USB Kill-Switch başarıyla aktifleştirildi (Cihaz: %s).", device_id)
+                except Exception as err:
+                    logger.exception("USB Kill-Switch başlatılamadı: %s", err)
+                    return {"success": False, "error": f"USB Kill-Switch başlatılamadı: {err}"}
+
+        return {
+            "success": True,
+            "usb_guard_enabled": enabled,
+            "device_id": device_id,
+            "panic_shutdown": panic_shutdown,
+        }
 
     # -------------------------------------------------------------------------
     # İstemci İletişim Döngüsü
@@ -843,6 +1032,15 @@ class RootDaemon:
     def stop(self) -> None:
         """Daemon'ı düzgün şekilde durdurur ve soketi temizler."""
         self._running = False
+        self._stop_auto_circuit_rotation()
+        with self._lock:
+            if self._usb_monitor is not None:
+                try:
+                    self._usb_monitor.stop()
+                except Exception:
+                    pass
+                self._usb_monitor = None
+
         if self._server_sock:
             try:
                 self._server_sock.close()

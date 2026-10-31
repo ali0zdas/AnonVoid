@@ -59,6 +59,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "flannel.*",
         ],
         "kill_switch": True,
+        "use_bridges": False,
+        "bridge_type": "obfs4",
+        "custom_bridges": [],
+        "exit_nodes": "",
+        "exclude_five_eyes": False,
+        "auto_renew_interval_sec": 0,
     },
     "forensics": {
         "clean_shell_history": True,
@@ -85,6 +91,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "close_to_tray": True,
         "notify_on_circuit_change": True,
         "auto_leak_test_on_connect": True,
+        "auto_leak_test": False,
+        "ram_suppression": False,
+    },
+    "security": {
+        "usb_killswitch_enabled": False,
+        "usb_authorized_device_id": "",
+        "usb_panic_shutdown": False,
     },
 }
 
@@ -256,6 +269,37 @@ def validate_network_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     validated["mac_in_place"] = cfg_bool(cfg.get("mac_in_place", base_net["mac_in_place"]))
     validated["kill_switch"] = cfg_bool(cfg.get("kill_switch", base_net["kill_switch"]))
 
+    validated["use_bridges"] = cfg_bool(cfg.get("use_bridges", base_net["use_bridges"]))
+    bridge_type = str(cfg.get("bridge_type", base_net["bridge_type"])).strip().lower()
+    if bridge_type in ("obfs4", "meek", "snowflake", "webtunnel"):
+        validated["bridge_type"] = bridge_type
+    else:
+        validated["bridge_type"] = base_net["bridge_type"]
+
+    custom_bridges = cfg.get("custom_bridges", base_net["custom_bridges"])
+    if isinstance(custom_bridges, list):
+        clean_bridges = []
+        for b in custom_bridges:
+            if isinstance(b, str) and 1 <= len(b.strip()) <= 512:
+                clean_b = re.sub(r"[\r\n\x00]", "", b.strip())
+                if clean_b:
+                    clean_bridges.append(clean_b)
+        validated["custom_bridges"] = clean_bridges
+    else:
+        validated["custom_bridges"] = list(base_net["custom_bridges"])
+
+    exit_nodes = str(cfg.get("exit_nodes", base_net["exit_nodes"])).strip()
+    clean_exit = re.sub(r"[^a-zA-Z0-9{},.~*_-]", "", exit_nodes)
+    validated["exit_nodes"] = clean_exit
+
+    validated["exclude_five_eyes"] = cfg_bool(cfg.get("exclude_five_eyes", base_net["exclude_five_eyes"]))
+
+    try:
+        auto_renew = int(cfg.get("auto_renew_interval_sec", base_net["auto_renew_interval_sec"]))
+        validated["auto_renew_interval_sec"] = max(0, min(86400, auto_renew))
+    except (ValueError, TypeError):
+        validated["auto_renew_interval_sec"] = base_net["auto_renew_interval_sec"]
+
     # Arayüz desenleri listesi doğrulaması
     excluded = cfg.get("excluded_interfaces", base_net["excluded_interfaces"])
     if isinstance(excluded, list):
@@ -284,6 +328,29 @@ def validate_forensics_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return validated
 
 
+def validate_security_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Güvenlik ve USB Kill-Switch yapılandırmasını doğrular."""
+    validated: Dict[str, Any] = {}
+    base_sec = DEFAULT_CONFIG["security"]
+
+    validated["usb_killswitch_enabled"] = cfg_bool(
+        cfg.get("usb_killswitch_enabled", base_sec["usb_killswitch_enabled"])
+    )
+
+    dev_id = cfg.get("usb_authorized_device_id", cfg.get("usb_Authorized_device_id", base_sec["usb_authorized_device_id"]))
+    if isinstance(dev_id, str):
+        clean_dev = re.sub(r"[^a-zA-Z0-9:-]", "", dev_id.strip())
+        validated["usb_authorized_device_id"] = clean_dev
+    else:
+        validated["usb_authorized_device_id"] = ""
+
+    validated["usb_panic_shutdown"] = cfg_bool(
+        cfg.get("usb_panic_shutdown", base_sec["usb_panic_shutdown"])
+    )
+
+    return validated
+
+
 def validate_full_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Tüm yapılandırma sözlüğünü şema ve aralık kontrollerinden geçirir."""
     if not isinstance(cfg, dict):
@@ -298,16 +365,21 @@ def validate_full_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if "forensics" in cfg and isinstance(cfg["forensics"], dict):
         validated["forensics"] = validate_forensics_config(cfg["forensics"])
 
+    if "security" in cfg and isinstance(cfg["security"], dict):
+        validated["security"] = validate_security_config(cfg["security"])
+
     if "daemon" in cfg and isinstance(cfg["daemon"], dict):
         daemon_cfg = cfg["daemon"]
         base_daemon = DEFAULT_CONFIG["daemon"]
 
         sock_path = str(daemon_cfg.get("socket_path", base_daemon["socket_path"])).strip()
         # Güvenli soket yolu kontrolü: yalnızca kök dosya sistemindeki /run/
-        # altı kabul edilir. /tmp herkese yazılabilir olduğu için sembolik bağ
-        # ve FIFO değiştirme saldırılarına açıktır (AGENTS.md güvenli geçici
-        # dosya ilkesi) ve bu nedenle beyaz listede tutulmaz.
-        if sock_path.startswith("/run/") and "\x00" not in sock_path:
+        # altı kabul edilir. Path traversal (..) ve null bayt (\x00) kesinlikle reddedilir.
+        if (
+            sock_path.startswith("/run/")
+            and "\x00" not in sock_path
+            and ".." not in sock_path.split("/")
+        ):
             validated["daemon"]["socket_path"] = sock_path
         else:
             validated["daemon"]["socket_path"] = base_daemon["socket_path"]
@@ -337,6 +409,12 @@ def validate_full_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         )
         validated["gui"]["auto_leak_test_on_connect"] = cfg_bool(
             gui_cfg.get("auto_leak_test_on_connect", base_gui["auto_leak_test_on_connect"])
+        )
+        validated["gui"]["auto_leak_test"] = cfg_bool(
+            gui_cfg.get("auto_leak_test", base_gui["auto_leak_test"])
+        )
+        validated["gui"]["ram_suppression"] = cfg_bool(
+            gui_cfg.get("ram_suppression", base_gui["ram_suppression"])
         )
 
     return validated
@@ -395,7 +473,17 @@ def safe_load_config(filepath: str, fallback_to_default: bool = True) -> Dict[st
                 f"İzin verilen üst sınır: {MAX_CONFIG_FILE_SIZE} bayt"
             )
 
-        content = os.read(fd, st.st_size)
+        total_size = st.st_size
+        chunks: List[bytes] = []
+        bytes_read = 0
+        while bytes_read < total_size:
+            chunk = os.read(fd, min(4096, total_size - bytes_read))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            bytes_read += len(chunk)
+
+        content = b"".join(chunks)
         raw_text = content.decode("utf-8")
         data = json.loads(raw_text)
 
@@ -443,7 +531,13 @@ def safe_save_config(
         raise PermissionError(f"Hedef dosya bir sembolik bağ olamaz: {filepath}")
 
     tmp_file = f"{filepath}.tmp.{os.getpid()}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if os.path.exists(tmp_file) or os.path.islink(tmp_file):
+        try:
+            os.unlink(tmp_file)
+        except OSError:
+            pass
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     if hasattr(os, "O_CLOEXEC"):

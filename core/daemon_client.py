@@ -228,9 +228,9 @@ class DaemonClient:
         """Mevcut servislerin ve koruma durumunun özetini alır."""
         return self.send_request("status", timeout=5.0)
 
-    def connect_network(self, network_config: Dict[str, Any]) -> Dict[str, Any]:
+    def connect_network(self, network_config: Dict[str, Any], timeout: float = 120.0) -> Dict[str, Any]:
         """Ağ kalkanını verilen yapılandırmayla aktifleştirir."""
-        return self.send_request("connect", params={"network": network_config}, timeout=20.0)
+        return self.send_request("connect", params={"network": network_config}, timeout=timeout)
 
     def disconnect_network(self) -> Dict[str, Any]:
         """Ağ kalkanını devreden çıkarır ve sistemi normale döndürür."""
@@ -251,6 +251,36 @@ class DaemonClient:
     def emergency_panic(self) -> Dict[str, Any]:
         """Acil durum panik mekanizmasını tetikler."""
         return self.send_request("panic", timeout=10.0)
+
+    def scan_forensic_exposure(self, timeout: float = 30.0) -> Dict[str, Any]:
+        """Kullanıcının adli iz maruziyet skorunu tarar."""
+        return self.send_request("scan_exposure", timeout=timeout)
+
+    def sanitize_metadata(self, filepath: str, timeout: float = 30.0) -> Dict[str, Any]:
+        """Belirtilen dosyanın meta verilerini adli standartlarda temizler."""
+        return self.send_request("sanitize_metadata", params={"filepath": filepath}, timeout=timeout)
+
+    def list_usb_devices(self, timeout: float = 10.0) -> Dict[str, Any]:
+        """Sisteme bağlı USB cihazlarının listesini alır."""
+        return self.send_request("usb_devices", timeout=timeout)
+
+    def configure_usb_guard(
+        self,
+        enabled: bool,
+        device_id: str = "",
+        panic_shutdown: bool = False,
+        timeout: float = 10.0,
+    ) -> Dict[str, Any]:
+        """USB Kill-Switch ve Dead Man's Switch monitörünü yapılandırır."""
+        return self.send_request(
+            "usb_guard_configure",
+            params={
+                "enabled": enabled,
+                "device_id": device_id,
+                "panic_shutdown": panic_shutdown,
+            },
+            timeout=timeout,
+        )
 
 
 # -----------------------------------------------------------------------------
