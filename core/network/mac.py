@@ -67,6 +67,48 @@ def get_current_mac(iface: str) -> Optional[str]:
     return None
 
 
+def get_permanent_mac(iface: str) -> Optional[str]:
+    """Arayüzün fabrika çıkışlı kalıcı (permanent) donanım MAC adresini tespit eder.
+
+    Öncelikle /sys/class/net/<iface>/permaddr dosyasını ve ardından `ethtool -P <iface>`
+    komutunu sorgular. Donanım seviyesinde kalıcı adres bulunamazsa mevcut adres değerine düşer.
+    """
+    clean_iface = cfg_interface_name(iface)
+    mac_regex = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
+
+    # 1. /sys/class/net/<iface>/permaddr denetimi
+    perm_path = f"/sys/class/net/{clean_iface}/permaddr"
+    if os.path.exists(perm_path):
+        try:
+            with open(perm_path, "r", encoding="utf-8") as f:
+                mac = f.read().strip().lower()
+                if mac_regex.match(mac) and mac != "00:00:00:00:00:00":
+                    return mac
+        except OSError:
+            pass
+
+    # 2. ethtool -P <iface> sorgulaması
+    try:
+        proc = subprocess.run(
+            ["ethtool", "-P", clean_iface],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if proc.returncode == 0:
+            match = re.search(r"Permanent address:\s*(([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", proc.stdout)
+            if match:
+                mac = match.group(1).lower()
+                if mac_regex.match(mac) and mac != "00:00:00:00:00:00":
+                    return mac
+    except Exception:
+        pass
+
+    # 3. Fallback: Mevcut MAC adresine dön
+    return get_current_mac(clean_iface)
+
+
 def get_physical_interfaces() -> List[str]:
     """Yalnızca fiziksel ve Wi-Fi ağ bağdaştırıcılarını listeler (Sanal olanlar hariç tutulur)."""
     interfaces: List[str] = []
@@ -128,9 +170,10 @@ class MACManager:
             result["error"] = f"Arayüzün mevcut MAC adresi tespit edilemedi: {clean_iface}"
             return result
 
-        # Orijinal MAC daha önce kaydedilmemişse hafızaya al
+        # Orijinal MAC daha önce kaydedilmemişse hafızaya al (Kalıcı fabrika adresi tercih edilir)
         if clean_iface not in self.original_macs:
-            self.original_macs[clean_iface] = old_mac
+            perm_mac = get_permanent_mac(clean_iface)
+            self.original_macs[clean_iface] = perm_mac or old_mac
 
         # 1. Yöntem: In-place (Arayüzü düşürmeden yerinde değiştirme)
         if in_place:
@@ -176,16 +219,37 @@ class MACManager:
     def restore_interface_mac(self, iface: str) -> bool:
         """Arayüzün orijinal donanım MAC adresini geri yükler."""
         clean_iface = cfg_interface_name(iface)
-        original_mac = self.original_macs.get(clean_iface)
+        original_mac = self.original_macs.get(clean_iface) or get_permanent_mac(clean_iface)
         if not original_mac:
             return True
 
         logger.info("%s orijinal MAC adresi geri yükleniyor: %s", clean_iface, original_mac)
+
+        # 1. Yöntem: In-place (Arayüzü düşürmeden yerinde geri yüklemeyi dene)
+        try:
+            cmd = ["ip", "link", "set", "dev", clean_iface, "address", original_mac]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False)
+            if proc.returncode == 0:
+                current = get_current_mac(clean_iface)
+                if current == original_mac:
+                    logger.info("%s orijinal MAC adresi yerinde (in-place) başarıyla geri yüklendi.", clean_iface)
+                    return True
+        except Exception as err:
+            logger.debug("%s yerinde geri yükleme başarısız, down/up deneniyor: %s", clean_iface, err)
+
+        # 2. Yöntem: Geçici down / up döngüsü
         try:
             subprocess.run(["ip", "link", "set", "dev", clean_iface, "down"], timeout=5, check=False)
             subprocess.run(["ip", "link", "set", "dev", clean_iface, "address", original_mac], timeout=5, check=False)
             subprocess.run(["ip", "link", "set", "dev", clean_iface, "up"], timeout=5, check=False)
-            return True
+
+            current = get_current_mac(clean_iface)
+            if current == original_mac:
+                logger.info("%s orijinal MAC adresi down/up ile geri yüklendi.", clean_iface)
+                return True
+            else:
+                logger.warning("%s MAC adresi doğrulanamadı (Mevcut: %s, Hedef: %s)", clean_iface, current, original_mac)
+                return False
         except Exception as err:
             logger.error("%s orijinal MAC geri yüklenemedi: %s", clean_iface, err)
             return False

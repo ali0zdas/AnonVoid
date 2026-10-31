@@ -53,7 +53,11 @@ LEGACY_TABLE_NAME = "fp-cleaner"
 
 
 def get_tor_uid() -> Optional[int]:
-    """Sistemdeki Tor kullanıcısının UID değerini tespit eder."""
+    """Sistemdeki Tor kullanıcısının UID değerini tespit eder.
+    
+    Önce bilinen Tor kullanıcı adlarını (/etc/passwd) dener. Bulunamazsa
+    /proc veya pgrep üzerinden çalışan canlı tor sürecinin gerçek UID'sini okur.
+    """
     tor_user_candidates = ["debian-tor", "tor", "toranon", "_tor"]
     for username in tor_user_candidates:
         try:
@@ -61,6 +65,44 @@ def get_tor_uid() -> Optional[int]:
                 return pwd.getpwnam(username).pw_uid
         except (KeyError, Exception):
             pass
+
+    # Fallback 1: Canlı çalışan tor sürecini pgrep ile sorgula
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-x", "tor"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for pid_str in proc.stdout.strip().split():
+                if pid_str.isdigit():
+                    proc_dir = f"/proc/{pid_str}"
+                    if os.path.exists(proc_dir):
+                        try:
+                            return os.stat(proc_dir).st_uid
+                        except OSError:
+                            pass
+    except Exception:
+        pass
+
+    # Fallback 2: /proc dizinini doğrudan tara (comm == 'tor')
+    try:
+        if os.path.exists("/proc"):
+            for entry in os.listdir("/proc"):
+                if entry.isdigit():
+                    comm_file = os.path.join("/proc", entry, "comm")
+                    if os.path.exists(comm_file):
+                        try:
+                            with open(comm_file, "r", encoding="utf-8") as f:
+                                if f.read().strip() == "tor":
+                                    return os.stat(os.path.join("/proc", entry)).st_uid
+                        except OSError:
+                            continue
+    except Exception:
+        pass
+
     return None
 
 
@@ -92,6 +134,8 @@ class FirewallEngine:
             f"table inet {self.table_name} {{",
             "    chain output {",
             "        type filter hook output priority 0; policy accept;",
+            '        oifname "lo" accept',
+            "        ct state established,related accept",
         ]
 
         # 1. Tor sürecinin kendi trafiğini kabul et (Döngü önleme)
@@ -108,30 +152,40 @@ class FirewallEngine:
         lan_set = ", ".join(TOR_LOCAL_NETS)
         lines.append(f"        ip daddr {{ {lan_set} }} accept")
 
+        # 4. Yönlendirilmiş yerel DNS trafiğine izin ver
+        lines.append(f"        udp dport {dns_port} accept")
+        lines.append(f"        tcp dport {dns_port} accept")
+
+        # 5. Giden tüm sızıntı riski taşıyan UDP (WebRTC/QUIC) ve ICMP paketlerini düşür
+        lines.append("        meta l4proto udp drop")
+        lines.append("        meta l4proto icmp drop")
+
         lines.extend([
             "    }",
             "    chain nat_output {",
             "        type nat hook output priority -100; policy accept;",
         ])
 
-        # 4. NAT zincirinde Tor sürecini muaf tut
+        # 6. NAT zincirinde Tor sürecini muaf tut (Döngü önleme)
         if tor_uid is not None:
             lines.append(f"        meta skuid {tor_uid} return")
 
-        # 5. LAN istisnalarını NAT'tan döndür
-        lines.append(f"        ip daddr {{ {lan_set} }} return")
-
-        # 6. DNS trafiğini Tor DNSPort'a yönlendir (UDP & TCP 53)
+        # 7. DNS trafiğini Tor DNSPort'a yönlendir (UDP & TCP 53)
+        # KRİTİK: Yerel DNS isteklerinin (127.0.0.53 veya 192.168.1.1) LAN istisnasıyla
+        # kaçmasını engellemek için LAN kuralının ÖNÜNE konulmalıdır.
         lines.append(f"        udp dport 53 redirect to :{dns_port}")
         lines.append(f"        tcp dport 53 redirect to :{dns_port}")
 
-        # 7. Tüm giden TCP trafiğini Tor TransPort'a yönlendir
+        # 8. LAN istisnalarını NAT'tan döndür (DNS hariç diğer LAN trafiği)
+        lines.append(f"        ip daddr {{ {lan_set} }} return")
+
+        # 9. Tüm giden TCP trafiğini Tor TransPort'a yönlendir
         lines.append(f"        meta l4proto tcp redirect to :{trans_port}")
 
         lines.append("    }")
         lines.append("}")
 
-        # 8. IPv6 Sızıntı Koruması (Tüm giden IPv6 trafiğini düşür)
+        # 10. IPv6 Sızıntı Koruması (Tüm giden IPv6 trafiğini düşür)
         if drop_ipv6:
             lines.extend([
                 f"table ip6 {self.table_name} {{",
@@ -154,6 +208,15 @@ class FirewallEngine:
         """Güvenlik duvarı kurallarını sisteme uygular."""
         if tor_uid is None:
             tor_uid = get_tor_uid()
+
+        # Tor UID tespit edilemezse sonsuz yönlendirme döngüsüne (infinite loop)
+        # girmemek için güvenlik duvarı kurallarını uygulama ve hata logla
+        if tor_uid is None:
+            logger.error(
+                "Tor UID tespit edilemedi! Trafik yönlendirme döngüsü (loop) oluşmaması için "
+                "güvenlik duvarı kuralları uygulanmadı."
+            )
+            return False
 
         # Önce eski tabloları temizle
         self.flush_rules()
@@ -205,17 +268,21 @@ class FirewallEngine:
                 for ip in DOH_SERVER_IPS:
                     subprocess.run(["iptables", "-A", "OUTPUT", "-d", ip, "-p", "tcp", "--dport", "443", "-j", "DROP"], timeout=5, check=False)
 
-            # Tor UID muafiyeti
+            # Tor UID muafiyeti (Döngü önleme)
             if tor_uid is not None:
                 subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-m", "owner", "--uid-owner", str(tor_uid), "-j", "RETURN"], timeout=5, check=False)
+
+            # DNS yönlendirme (Yerel DNS kaçışını önlemek için LAN istisnasından ÖNCE olmalıdır)
+            subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(dns_port)], timeout=5, check=False)
+            subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(dns_port)], timeout=5, check=False)
 
             # LAN istisnaları
             for net in TOR_LOCAL_NETS:
                 subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-d", net, "-j", "RETURN"], timeout=5, check=False)
 
-            # DNS yönlendirme
-            subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(dns_port)], timeout=5, check=False)
-            subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(dns_port)], timeout=5, check=False)
+            # Yönlendirilmiş DNS hariç UDP ve ICMP trafiğini engelle (Sızıntı önleme)
+            subprocess.run(["iptables", "-A", "OUTPUT", "-p", "udp", "!", "--dport", str(dns_port), "-j", "DROP"], timeout=5, check=False)
+            subprocess.run(["iptables", "-A", "OUTPUT", "-p", "icmp", "-j", "DROP"], timeout=5, check=False)
 
             # TCP yönlendirme
             subprocess.run(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "-j", "REDIRECT", "--to-ports", str(trans_port)], timeout=5, check=False)

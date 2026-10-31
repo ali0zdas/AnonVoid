@@ -24,6 +24,9 @@ from core.forensics.shell import clean_shell_history
 
 logger = logging.getLogger("AnonVoidPanic")
 
+PANIC_TABLE_NAME = "anonvoid-panic"
+LEGACY_PANIC_TABLE_NAME = "fp-panic"
+
 
 def apply_emergency_network_kill() -> bool:
     """Tüm giden ve gelen ağ trafiğini iptables/nftables seviyesinde anında bloke eder."""
@@ -33,7 +36,7 @@ def apply_emergency_network_kill() -> bool:
     # 1. nftables acil durum drop tablosu
     try:
         panic_nft = (
-            "table inet fp-panic {\n"
+            f"table inet {PANIC_TABLE_NAME} {{\n"
             "    chain input { type filter hook input priority -1000; policy drop; }\n"
             "    chain output { type filter hook output priority -1000; policy drop; }\n"
             "}\n"
@@ -68,10 +71,11 @@ def apply_emergency_network_kill() -> bool:
 def remove_emergency_network_kill() -> bool:
     """Acil durum ağ kilidini kaldırır ve bağlantıyı serbest bırakır."""
     logger.info("Acil durum ağ kilidi kaldırılıyor...")
-    try:
-        subprocess.run(["nft", "delete", "table", "inet", "fp-panic"], timeout=5, check=False)
-    except Exception:
-        pass
+    for tbl in (PANIC_TABLE_NAME, LEGACY_PANIC_TABLE_NAME):
+        try:
+            subprocess.run(["nft", "delete", "table", "inet", tbl], timeout=5, check=False)
+        except Exception:
+            pass
 
     try:
         subprocess.run(["iptables", "-P", "OUTPUT", "ACCEPT"], timeout=5, check=False)

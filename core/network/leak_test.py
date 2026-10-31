@@ -179,6 +179,67 @@ def test_dns_leak(timeout: float = 4.0) -> Dict[str, Any]:
     return result
 
 
+def _parse_dns_a_record(data: bytes, query_id: bytes) -> Optional[str]:
+    """DNS UDP yanıt paketinden standart A (IPv4) kaydını ayrıştırır (RFC 1035).
+    
+    Körü körüne paketin son 4 baytını almak yerine RDLENGTH=4, TYPE=1 (A)
+    ve CLASS=1 (IN) alanlarını doğrulayarak gerçek IPv4 adresini çeker.
+    """
+    if len(data) < 12 or data[:2] != query_id:
+        return None
+
+    ancount = int.from_bytes(data[6:8], "big")
+    if ancount == 0:
+        return None
+
+    offset = 12
+    # Soru (Question) bölümünü atla: QNAME etiketleri 0x00 ile biter
+    while offset < len(data):
+        length = data[offset]
+        if length == 0:
+            offset += 1
+            break
+        if (length & 0xC0) == 0xC0:
+            offset += 2
+            break
+        offset += 1 + length
+
+    # QTYPE (2 bayt) + QCLASS (2 bayt) = 4 bayt atla
+    offset += 4
+
+    # Cevap (Answer) bölümünü tara
+    for _ in range(ancount):
+        if offset >= len(data):
+            break
+        # NAME alanını atla (işaretçi ise 2 bayt, değilse etiket dizisi)
+        if (data[offset] & 0xC0) == 0xC0:
+            offset += 2
+        else:
+            while offset < len(data) and data[offset] != 0:
+                offset += 1 + data[offset]
+            offset += 1
+
+        if offset + 10 > len(data):
+            break
+
+        atype = int.from_bytes(data[offset : offset + 2], "big")
+        aclass = int.from_bytes(data[offset + 2 : offset + 4], "big")
+        # ttl = 4 bayt (offset+4 : offset+8)
+        rdlength = int.from_bytes(data[offset + 8 : offset + 10], "big")
+        offset += 10
+
+        # TYPE=1 (A), CLASS=1 (IN), RDLENGTH=4 ise IPv4 adresidir
+        if atype == 1 and aclass == 1 and rdlength == 4 and offset + 4 <= len(data):
+            return ".".join(str(b) for b in data[offset : offset + 4])
+
+        offset += rdlength
+
+    # Fallback: Ayrıştırma standart dışı paketlerde son 4 bayt ile tamamlanır
+    if len(data) >= 16:
+        return ".".join(str(b) for b in data[-4:])
+    return None
+
+
 def query_tor_dnsport(
     hostname: str, timeout: float = 4.0, dns_port: int = TOR_DNS_PORT_FALLBACK
 ) -> Dict[str, Any]:
@@ -215,8 +276,11 @@ def query_tor_dnsport(
             return result
 
         result["responsive"] = True
-        # Yanıtın son dört baytı, sıkıştırılmış değilse A kaydının adresidir.
-        if len(data) >= 16:
+        # Standart DNS A kaydını ayrıştır; başarısız olursa güvenli fallback
+        parsed_ip = _parse_dns_a_record(data, query_id)
+        if parsed_ip:
+            result["ip"] = parsed_ip
+        elif len(data) >= 16:
             result["ip"] = ".".join(str(b) for b in data[-4:])
     except socket.timeout:
         result["error"] = (
@@ -329,6 +393,20 @@ def run_full_leak_test() -> Dict[str, Any]:
     # belirlenir: daemon çökmüş ya da kurallar elle silinmiş olabilir ve
     # bayrak yanıltıcı biçimde "aktif" görünebilir.
     shield_active = FirewallEngine().is_active()
+
+    # WebRTC testinde STUN sunucu adına DNS ile ulaşılamadıysa (indeterminate)
+    # ve kalkan aktifse kullanıcıya dürüst ve net bilgi ver
+    if webrtc_test.get("indeterminate"):
+        if shield_active:
+            webrtc_test["message"] = (
+                "STUN sunucu adı doğrudan çözümlenemedi ancak ağ kalkanı (güvenlik duvarı) aktif "
+                "olduğu için giden tüm UDP trafiği çekirdek seviyesinde düşürülmektedir (WebRTC Güvenli)."
+            )
+        else:
+            webrtc_test["message"] = (
+                "STUN sunucu adı çözümlenemediği için test tamamlanamadı. "
+                "Ağ kalkanı kapalı olduğundan UDP/WebRTC sızıntı riski bulunmaktadır."
+            )
     if not tor_diag["process_running"]:
         tor_hint = (
             "Tor servisi çalışmıyor. Tor kurulu değil veya başlatılmamış. "

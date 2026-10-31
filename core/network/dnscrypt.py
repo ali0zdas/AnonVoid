@@ -118,12 +118,21 @@ class DNSCryptManager:
 
         # 2. Fallback: /etc/resolv.conf dosyasını yedekle ve 127.0.0.1 yaz
         try:
-            if os.path.exists(RESOLV_CONF_PATH) and not os.path.islink(RESOLV_CONF_PATH):
+            if os.path.exists(RESOLV_CONF_PATH):
                 if not existing_resolv_backup():
+                    # Sembolik bağ olsa dahi orijinal içeriği koru
                     shutil.copy2(RESOLV_CONF_PATH, RESOLV_CONF_BACKUP)
 
+                # Standart resolv.conf formatı: 'port' direktifi glibc tarafından tanınmadığından
+                # açıklayıcı yorum satırı olarak eklenir ve nameserver 127.0.0.1 atanır.
+                content = (
+                    "# AnonVoid DNSCrypt Kilidi - Otomatik Yapılandırma\n"
+                    f"# DNSCrypt-Proxy Dinleme Soketi: 127.0.0.1:{self.port}\n"
+                    "nameserver 127.0.0.1\n"
+                    "options edns0 trust-ad\n"
+                )
                 with open(RESOLV_CONF_PATH, "w", encoding="utf-8") as f:
-                    f.write(f"# AnonVoid DNSCrypt Kilidi\nnameserver 127.0.0.1\nport {self.port}\n")
+                    f.write(content)
 
                 result["success"] = True
                 logger.info("/etc/resolv.conf fallback üzerinden DNSCrypt soketine yönlendirildi.")
@@ -153,7 +162,11 @@ class DNSCryptManager:
         backup = existing_resolv_backup()
         if backup:
             try:
-                shutil.move(backup, RESOLV_CONF_PATH)
+                shutil.copy2(backup, RESOLV_CONF_PATH)
+                try:
+                    os.remove(backup)
+                except OSError:
+                    pass
                 logger.info("Orijinal /etc/resolv.conf geri yüklendi.")
             except Exception as err:
                 logger.warning("/etc/resolv.conf geri yüklenemedi: %s", err)

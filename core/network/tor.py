@@ -15,7 +15,7 @@ import socket
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
 sys.dont_write_bytecode = True
@@ -31,6 +31,16 @@ TORRC_BACKUP_PATH = "/etc/tor/torrc.anonvoid.bak"
 # yazılmaz; aksi halde kullanıcının orijinal torrc'i kalıcı olarak kaybolur.
 TORRC_LEGACY_BACKUP_PATH = "/etc/tor/torrc.fp-cleaner.bak"
 TOR_CONTROL_PORT = 9051
+
+# Gözetim İttifakı (Five Eyes) Ülke Kodları
+FIVE_EYES_NODES = "{us},{gb},{ca},{au},{nz}"
+
+# Varsayılan Snowflake Köprü Şablonu
+DEFAULT_SNOWFLAKE_BRIDGE = (
+    "snowflake 192.0.2.3:1 2B280B23DD746099CA81285814F029E7363E7A14 "
+    "url=https://snowflake-broker.torproject.net.global.prod.fastly.net/ "
+    "front=cdn.sstatic.net ice=stun:stun.l.google.com:19302,stun:stun.voip.blackberry.com:3478"
+)
 
 # Güvenlik açığı kapısı: nftables kural seti tüm giden TCP trafiğini Tor
 # TransPort'a yönlendirir (kill-switch). Tor ayakta değilse bu kural, sistemin
@@ -379,7 +389,7 @@ def renew_tor_circuit(control_port: int = TOR_CONTROL_PORT, password: str = "") 
 
     Args:
         control_port: Tor kontrol portu (varsayılan: 9051).
-        password: Varsa kontrol portu parolası.
+        password: Varsa kontrol portu parolası. Boş ise çerez doğrulaması kullanılır.
 
     Returns:
         Dict[str, Any]: İşlem sonuç bilgisi.
@@ -399,18 +409,35 @@ def renew_tor_circuit(control_port: int = TOR_CONTROL_PORT, password: str = "") 
     try:
         sock.connect(("127.0.0.1", control_port))
 
-        # Kimlik doğrulama isteği
-        auth_cmd = f'AUTHENTICATE "{password}"\r\n' if password else "AUTHENTICATE\r\n"
-        sock.sendall(auth_cmd.encode("utf-8"))
+        # Kimlik doğrulama isteği: Parola verilmişse AUTHENTICATE "parola", verilmemişse çerez dene
+        if password:
+            auth_cmd = f'AUTHENTICATE "{password}"\r\n'
+            sock.sendall(auth_cmd.encode("utf-8"))
+            resp = _control_read_reply(sock, 5.0)
+        else:
+            cookie_path = _control_cookie_path()
+            auth_ok = False
+            if cookie_path and os.path.exists(cookie_path):
+                try:
+                    with open(cookie_path, "rb") as handle:
+                        cookie = handle.read()
+                    sock.sendall(b"AUTHENTICATE " + cookie.hex().upper().encode("ascii") + b"\r\n")
+                    resp = _control_read_reply(sock, 5.0)
+                    if resp.startswith("250"):
+                        auth_ok = True
+                except OSError:
+                    pass
+            if not auth_ok:
+                sock.sendall(b"AUTHENTICATE\r\n")
+                resp = _control_read_reply(sock, 5.0)
 
-        resp = sock.recv(1024).decode("utf-8")
         if not resp.startswith("250"):
             result["message"] = f"Tor kimlik doğrulaması başarısız: {resp.strip()}"
             return result
 
         # Devre yenileme sinyali gönder
         sock.sendall(b"SIGNAL NEWNYM\r\n")
-        resp = sock.recv(1024).decode("utf-8")
+        resp = _control_read_reply(sock, 5.0)
 
         if resp.startswith("250"):
             result["success"] = True
@@ -419,11 +446,16 @@ def renew_tor_circuit(control_port: int = TOR_CONTROL_PORT, password: str = "") 
         else:
             result["message"] = f"SIGNAL NEWNYM reddedildi: {resp.strip()}"
 
-        sock.sendall(b"QUIT\r\n")
+        try:
+            sock.sendall(b"QUIT\r\n")
+        except OSError:
+            pass
     except ConnectionRefusedError:
         result["message"] = f"Tor kontrol portuna ({control_port}) bağlanılamadı. Tor çalışıyor mu?"
     except socket.timeout:
         result["message"] = "Tor kontrol portundan yanıt alınamadı (Zaman aşımı)."
+    except (socket.error, OSError) as err:
+        result["message"] = f"Tor kontrol portuna ({control_port}) bağlanılamadı: {err}"
     except Exception as err:
         result["message"] = f"Devre yenilenirken hata oluştu: {err}"
     finally:
@@ -442,9 +474,19 @@ class TorManager:
         self,
         torrc_path: str = DEFAULT_TORRC_PATH,
         backup_path: str = TORRC_BACKUP_PATH,
+        use_bridges: bool = False,
+        bridge_type: str = "obfs4",
+        custom_bridges: Optional[List[str]] = None,
+        exit_nodes: str = "",
+        exclude_five_eyes: bool = False,
     ) -> None:
         self.torrc_path = torrc_path
         self.backup_path = backup_path
+        self.use_bridges = use_bridges
+        self.bridge_type = bridge_type.lower()
+        self.custom_bridges = list(custom_bridges) if custom_bridges else []
+        self.exit_nodes = exit_nodes.strip()
+        self.exclude_five_eyes = exclude_five_eyes
 
     def generate_torrc_content(
         self,
@@ -452,28 +494,69 @@ class TorManager:
         dns_port: int = 5300,
         socks_port: int = 9050,
         control_port: int = 9051,
+        use_bridges: Optional[bool] = None,
+        bridge_type: Optional[str] = None,
+        custom_bridges: Optional[List[str]] = None,
+        exit_nodes: Optional[str] = None,
+        exclude_five_eyes: Optional[bool] = None,
     ) -> str:
         """Şeffaf proxy için güvenli ve optimize torrc yapılandırması üretir."""
-        return (
-            "# AnonVoid - Otomatik Yapılandırılmış torrc\n"
-            f"SocksPort {cfg_port(socks_port, 9050)} IsolateDestAddr\n"
-            f"TransPort {cfg_port(trans_port, 9040)}\n"
-            f"DNSPort {cfg_port(dns_port, 5300)}\n"
-            f"ControlPort {cfg_port(control_port, 9051)}\n"
+        bridges_enabled = self.use_bridges if use_bridges is None else use_bridges
+        b_type = (self.bridge_type if bridge_type is None else bridge_type).lower()
+        bridges = self.custom_bridges if custom_bridges is None else custom_bridges
+        ex_nodes = (self.exit_nodes if exit_nodes is None else exit_nodes).strip()
+        ex_5eyes = self.exclude_five_eyes if exclude_five_eyes is None else exclude_five_eyes
+
+        lines = [
+            "# AnonVoid - Otomatik Yapılandırılmış torrc",
+            f"SocksPort {cfg_port(socks_port, 9050)} IsolateDestAddr",
+            f"TransPort {cfg_port(trans_port, 9040)}",
+            f"DNSPort {cfg_port(dns_port, 5300)}",
+            f"ControlPort {cfg_port(control_port, 9051)}",
             # Kontrol portu kimlik doğrulamasız bırakılırsa sistemdeki HERHANGİ
             # bir yerel kullanıcı Tor devrelerini okuyabilir, devre kapatabilir
             # ve SIGNAL NEWNYM gönderebilir. Bu, yerel ayrıcalık yükseltmedir.
             # Çerez tabanlı kimlik doğrulama hem güvenli hem de root daemon'ın
             # /run/tor altındaki çerezi okuyabilmesi sayesinde işlevsel kalır.
-            "CookieAuthentication 1\n"
-            "CookieAuthFileGroupOnly 1\n"
-            "SafeLogging 1\n"
-            "VirtualAddrNetworkIPv4 10.192.0.0/10\n"
-            "AutomapHostsOnResolve 1\n"
-            "AutomapHostsSuffixes .onion,.exit\n"
-            "AvoidDiskWrites 1\n"
-            "Log notice stdout\n"
-        )
+            "CookieAuthentication 1",
+            "CookieAuthFileGroupOnly 1",
+            "SafeLogging 1",
+            "VirtualAddrNetworkIPv4 10.192.0.0/10",
+            "AutomapHostsOnResolve 1",
+            "AutomapHostsSuffixes .onion,.exit",
+            "AvoidDiskWrites 1",
+            "Log notice stdout",
+        ]
+
+        # Coğrafi Çıkış Düğümü Seçimi (Geo Exit Selection)
+        if ex_nodes:
+            lines.append(f"ExitNodes {ex_nodes}")
+            lines.append("StrictNodes 1")
+
+        # Gözetim İttifakı (Five Eyes) Hariç Tutma
+        if ex_5eyes:
+            lines.append(f"ExcludeExitNodes {FIVE_EYES_NODES}")
+            if "StrictNodes 1" not in lines:
+                lines.append("StrictNodes 1")
+
+        # Pluggable Transports Köprü Yapılandırması
+        if bridges_enabled:
+            lines.append("UseBridges 1")
+            if b_type == "snowflake":
+                lines.append("ClientTransportPlugin snowflake exec /usr/bin/snowflake-client")
+                if not bridges:
+                    lines.append(f"Bridge {DEFAULT_SNOWFLAKE_BRIDGE}")
+            else:
+                lines.append("ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy")
+            if bridges:
+                for br in bridges:
+                    br_line = br.strip()
+                    if br_line:
+                        if not br_line.startswith("Bridge "):
+                            br_line = f"Bridge {br_line}"
+                        lines.append(br_line)
+
+        return "\n".join(lines) + "\n"
 
     def _existing_torrc_backup(self) -> str:
         """Geri yüklenecek geçerli torrc yedeğinin yolunu döndürür (yoksa boş dize)."""
@@ -500,6 +583,11 @@ class TorManager:
         dns_port: int = 5300,
         socks_port: int = 9050,
         control_port: int = 9051,
+        use_bridges: Optional[bool] = None,
+        bridge_type: Optional[str] = None,
+        custom_bridges: Optional[List[str]] = None,
+        exit_nodes: Optional[str] = None,
+        exclude_five_eyes: Optional[bool] = None,
     ) -> bool:
         """Eksik torrc direktiflerini ekler ve Tor servisini başlatır.
 
@@ -521,6 +609,11 @@ class TorManager:
                 dns_port=dns_port,
                 socks_port=socks_port,
                 control_port=control_port,
+                use_bridges=use_bridges,
+                bridge_type=bridge_type,
+                custom_bridges=custom_bridges,
+                exit_nodes=exit_nodes,
+                exclude_five_eyes=exclude_five_eyes,
             )
             if changed:
                 logger.info("torrc eksik direktiflerle güncellendi: %s", self.torrc_path)
@@ -548,8 +641,19 @@ class TorManager:
         dns_port: int = 5300,
         socks_port: int = 9050,
         control_port: int = 9051,
+        use_bridges: Optional[bool] = None,
+        bridge_type: Optional[str] = None,
+        custom_bridges: Optional[List[str]] = None,
+        exit_nodes: Optional[str] = None,
+        exclude_five_eyes: Optional[bool] = None,
     ) -> bool:
         """Eksik direktifleri ekler; var olanlara DOKUNMAZ. Değişiklik olduysa True."""
+        bridges_enabled = self.use_bridges if use_bridges is None else use_bridges
+        b_type = (self.bridge_type if bridge_type is None else bridge_type).lower()
+        bridges = self.custom_bridges if custom_bridges is None else custom_bridges
+        ex_nodes = (self.exit_nodes if exit_nodes is None else exit_nodes).strip()
+        ex_5eyes = self.exclude_five_eyes if exclude_five_eyes is None else exclude_five_eyes
+
         # Mevcut izinleri koru; yeni dosya için dağıtım varsayılanı (0644) kullan.
         # DİKKAT: torrc Tor tarafından `debian-tor` kullanıcısıyla okunur.
         # 0640 root:root yapmak Tor'un kendi yapılandırmasını okuyamamasına ve
@@ -590,7 +694,38 @@ class TorManager:
             ("AutomapHostsOnResolve", "AutomapHostsOnResolve 1"),
         ]
 
-        missing = [line for key, line in wanted if key not in active_keys]
+        if ex_nodes:
+            wanted.append(("ExitNodes", f"ExitNodes {ex_nodes}"))
+            wanted.append(("StrictNodes", "StrictNodes 1"))
+
+        if ex_5eyes:
+            wanted.append(("ExcludeExitNodes", f"ExcludeExitNodes {FIVE_EYES_NODES}"))
+            wanted.append(("StrictNodes", "StrictNodes 1"))
+
+        if bridges_enabled:
+            wanted.append(("UseBridges", "UseBridges 1"))
+            if b_type == "snowflake":
+                wanted.append(("ClientTransportPlugin", "ClientTransportPlugin snowflake exec /usr/bin/snowflake-client"))
+                if not bridges:
+                    wanted.append(("Bridge", f"Bridge {DEFAULT_SNOWFLAKE_BRIDGE}"))
+            else:
+                wanted.append(("ClientTransportPlugin", "ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy"))
+            if bridges:
+                for br in bridges:
+                    br_line = br.strip()
+                    if br_line:
+                        if not br_line.startswith("Bridge "):
+                            br_line = f"Bridge {br_line}"
+                        wanted.append(("Bridge", br_line))
+
+        missing = []
+        for key, line in wanted:
+            if key == "Bridge":
+                if line not in existing:
+                    missing.append(line)
+            elif key not in active_keys:
+                missing.append(line)
+
         if not missing:
             return False
 
@@ -615,18 +750,32 @@ class TorManager:
     def reload_service(self) -> bool:
         """Tor servisini başlatır ya da etkinse yeniden yükler.
 
-        `reload-or-restart` tek başına yeterli değildir: Debian/Kali'de
-        `tor.service` çoklu-örnek (multi-instance) ana birimidir ve varsayılan
-        olarak KAPALIDIR. Gerçek dinleyici `tor@default.service`'tir. Bu
-        nedenle önce açıkça `start` denenir, ardından durum doğrulanır.
+        Tor çalışıyorsa yeni yapılandırmayı uygulamak için önce reload/restart
+        komutları denenir. Çoklu-örnek Kali/Debian ortamlarında tor.service kapalı
+        kalabildiği için servislerin eksiksiz ayağa kaldırılması amacıyla start
+        ve enable komutları da güvence olarak yürütülür.
         """
         logger.info("Tor servisi başlatılıyor/yeniden yükleniyor...")
+        running = is_tor_running()
 
+        if running:
+            # Tor çalışıyorsa yeni torrc direktiflerini yüklemek için önce reload/restart dene
+            reload_cmds = [
+                ["systemctl", "reload-or-restart", "tor"],
+                ["systemctl", "restart", "tor@default"],
+            ]
+            for cmd in reload_cmds:
+                try:
+                    subprocess.run(
+                        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20, check=False
+                    )
+                except Exception:
+                    pass
+
+        # Servis çalışmıyorsa ya da çoklu-örnek birimi kapalıysa start komutları
         commands = [
             ["systemctl", "start", "tor"],
             ["systemctl", "enable", "--now", "tor@default"],
-            ["systemctl", "reload-or-restart", "tor"],
-            ["systemctl", "restart", "tor@default"],
         ]
         for cmd in commands:
             try:
