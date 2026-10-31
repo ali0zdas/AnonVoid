@@ -174,6 +174,10 @@ class LeakPanel(QWidget):
         return frame
 
     # ------------------------------------------------------------------
+    def run_leak_test(self) -> None:
+        """Sızıntı testini başlatır (`run_test` takma adı)."""
+        self.run_test()
+
     def run_test(self) -> None:
         """Sızıntı testini arayüzü kilitlemeden yürütür."""
         self.btn_run_test.setEnabled(False)

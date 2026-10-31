@@ -117,6 +117,57 @@ def paint_icon(
             painter.setPen(_pen(QColor(color), width * 0.75))
             painter.drawEllipse(_scaled(rect, knob, y), rect.width() * 1.55 / 24.0, rect.width() * 1.55 / 24.0)
 
+    elif name == "terminal":
+        # Komut satırı: yuvarlatılmış pencere, komut istemi ve imleç çizgisi.
+        body = QRectF(
+            rect.left() + rect.width() * 3.2 / 24.0,
+            rect.top() + rect.height() * 4.4 / 24.0,
+            rect.width() * 17.6 / 24.0,
+            rect.height() * 15.2 / 24.0,
+        )
+        painter.drawRoundedRect(body, rect.width() * 2.0 / 24.0, rect.width() * 2.0 / 24.0)
+        painter.drawLine(_scaled(rect, 7.0, 9.6), _scaled(rect, 9.6, 12.0))
+        painter.drawLine(_scaled(rect, 9.6, 12.0), _scaled(rect, 7.0, 14.4))
+        painter.drawLine(_scaled(rect, 12.4, 14.8), _scaled(rect, 16.8, 14.8))
+
+    elif name == "list":
+        # Günlük: solda madde işaretleri, sağda değişken uzunlukta satırlar.
+        for y, end in ((6.2, 19.0), (12.0, 16.4), (17.8, 12.8)):
+            painter.setBrush(color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(_scaled(rect, 4.8, y), rect.width() * 0.85 / 24.0, rect.width() * 0.85 / 24.0)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(_pen(color, width))
+            painter.drawLine(_scaled(rect, 8.2, y), _scaled(rect, end, y))
+
+    elif name == "trash":
+        # Önbellek/çöp: kapak, gövde ve iç çizgiler.
+        painter.drawLine(_scaled(rect, 4.6, 6.4), _scaled(rect, 19.4, 6.4))
+        painter.drawLine(_scaled(rect, 9.4, 4.4), _scaled(rect, 9.4, 6.4))
+        painter.drawLine(_scaled(rect, 14.6, 4.4), _scaled(rect, 14.6, 6.4))
+        painter.drawLine(_scaled(rect, 9.4, 4.4), _scaled(rect, 14.6, 4.4))
+        body = QRectF(
+            rect.left() + rect.width() * 6.4 / 24.0,
+            rect.top() + rect.height() * 6.4 / 24.0,
+            rect.width() * 11.2 / 24.0,
+            rect.height() * 13.4 / 24.0,
+        )
+        painter.drawRoundedRect(body, rect.width() * 2.0 / 24.0, rect.width() * 2.0 / 24.0)
+        painter.drawLine(_scaled(rect, 10.4, 9.6), _scaled(rect, 10.4, 16.6))
+        painter.drawLine(_scaled(rect, 13.6, 9.6), _scaled(rect, 13.6, 16.6))
+
+    elif name == "box":
+        # Paket: kutu gövdesi, bant çizgisi ve kilit dili.
+        body = QRectF(
+            rect.left() + rect.width() * 4.4 / 24.0,
+            rect.top() + rect.height() * 6.0 / 24.0,
+            rect.width() * 15.2 / 24.0,
+            rect.height() * 13.2 / 24.0,
+        )
+        painter.drawRoundedRect(body, rect.width() * 2.0 / 24.0, rect.width() * 2.0 / 24.0)
+        painter.drawLine(_scaled(rect, 4.4, 10.2), _scaled(rect, 19.6, 10.2))
+        painter.drawLine(_scaled(rect, 12.0, 10.2), _scaled(rect, 12.0, 13.8))
+
     elif name == "shield":
         path = QPainterPath()
         path.moveTo(*_xy(rect, 12.0, 3.6))

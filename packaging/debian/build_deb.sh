@@ -54,12 +54,8 @@ find "$PKG_ROOT/opt/anonvoid" -type d -exec chmod 0755 {} +
 find "$PKG_ROOT/opt/anonvoid" -type f -exec chmod 0644 {} +
 chmod 0755 "$PKG_ROOT/opt/anonvoid/main.py"
 
-# 4. Çalıştırıcı Wrapper (/usr/bin/anonvoid ve geriye dönük link)
-cat << 'EOF' > "$PKG_ROOT/usr/bin/anonvoid"
-#!/bin/sh
-export PYTHONDONTWRITEBYTECODE=1
-exec python3 /opt/anonvoid/main.py "$@"
-EOF
+# 4. Çalıştırıcı Betik (/usr/bin/anonvoid ve geriye dönük link)
+sed 's|@PREFIX@|/opt/anonvoid|g' "$PROJECT_ROOT/packaging/launcher/anonvoid" > "$PKG_ROOT/usr/bin/anonvoid"
 chmod 0755 "$PKG_ROOT/usr/bin/anonvoid"
 # Eski adla (fp-cleaner) çağırma geriye dönük uyumluluk sembolik bağı
 ln -sf anonvoid "$PKG_ROOT/usr/bin/fp-cleaner"

@@ -25,7 +25,7 @@ RestartSec=3s
 
 # Güvenlik ve İzolasyon Sertleştirmesi (Hardening)
 ProtectSystem=full
-ProtectHome=read-only
+ProtectHome=no
 PrivateTmp=true
 # Tor yapılandırması, DNS kilidi ve Tor çerezleri için gerekli YAZMA izinleri.
 # ProtectSystem=full /etc'yi salt-okunur yapar; bu satırlar olmadan daemon

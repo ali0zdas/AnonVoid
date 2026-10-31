@@ -638,6 +638,11 @@ class LiveTrafficChart(_ThemedMixin, QFrame):
         self._is_protected = False
         self._tunnel_info = "Tünel: Beklemede"
 
+        # Gerçek Linux ağ istatistikleri takibi (/proc/net/dev)
+        self._last_proc_rx: Optional[int] = None
+        self._last_proc_tx: Optional[int] = None
+        self._last_proc_time: float = 0.0
+
         # Otomatik dalgalanma zamanlayıcısı
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(self._auto_pulse)
@@ -652,7 +657,8 @@ class LiveTrafficChart(_ThemedMixin, QFrame):
             self._tunnel_info = tunnel_info
         else:
             self._tunnel_info = "Tor TransPort (9040) + DNSCrypt (5353)" if is_protected else "Korumasız Direkt Trafik"
-        self.update()
+        if self.isVisible():
+            self.update()
 
     def push_data(self, down_kb: float, up_kb: float) -> None:
         """Grafiğe yeni indirme/yükleme veri noktası ekler."""
@@ -660,10 +666,64 @@ class LiveTrafficChart(_ThemedMixin, QFrame):
         self._cur_up = max(0.0, up_kb)
         self._down_history.append(self._cur_down)
         self._up_history.append(self._cur_up)
-        self.update()
+        if self.isVisible():
+            self.update()
+
+    def _read_proc_net_dev(self) -> Optional[Tuple[int, int]]:
+        """Linux /proc/net/dev dosyasından fiziksel arayüzlerin (lo hariç) toplam RX ve TX baytını okur."""
+        proc_path = "/proc/net/dev"
+        try:
+            if not os.path.exists(proc_path):
+                return None
+            total_rx = 0
+            total_tx = 0
+            with open(proc_path, "r", encoding="utf-8", errors="ignore") as handle:
+                lines = handle.readlines()
+            # İlk 2 satır başlık verisidir
+            for line in lines[2:]:
+                if ":" not in line:
+                    continue
+                iface, data = line.split(":", 1)
+                iface = iface.strip()
+                if iface == "lo":
+                    continue
+                parts = data.split()
+                if len(parts) >= 9:
+                    total_rx += int(parts[0])
+                    total_tx += int(parts[8])
+            return (total_rx, total_tx)
+        except Exception:
+            return None
 
     def _auto_pulse(self) -> None:
-        """Ağ korumalıyken canlı gerçekçi veri dalgalanması üretir."""
+        """Ağ trafiğini gerçek /proc/net/dev verisi veya yumuşak simülasyonla günceller."""
+        now = time.time()
+        proc_stats = self._read_proc_net_dev()
+
+        if proc_stats is not None:
+            rx_bytes, tx_bytes = proc_stats
+            if (
+                self._last_proc_rx is not None
+                and self._last_proc_tx is not None
+                and self._last_proc_time > 0.0
+            ):
+                dt = max(0.1, now - self._last_proc_time)
+                diff_rx = max(0, rx_bytes - self._last_proc_rx)
+                diff_tx = max(0, tx_bytes - self._last_proc_tx)
+                down_kb = diff_rx / (1024.0 * dt)
+                up_kb = diff_tx / (1024.0 * dt)
+
+                self._last_proc_rx = rx_bytes
+                self._last_proc_tx = tx_bytes
+                self._last_proc_time = now
+                self.push_data(down_kb, up_kb)
+                return
+            else:
+                self._last_proc_rx = rx_bytes
+                self._last_proc_tx = tx_bytes
+                self._last_proc_time = now
+
+        # /proc/net/dev mevcut değilse (Windows veya başlangıç) yumuşak akış eğrisi kullan
         if self._is_protected:
             new_down = max(10.0, min(850.0, self._cur_down + random.uniform(-25.0, 38.0)))
             new_up = max(2.0, min(220.0, self._cur_up + random.uniform(-8.0, 14.0)))

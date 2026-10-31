@@ -283,8 +283,9 @@ TimeoutStopSec=10
 Restart=on-failure
 RestartSec=3s
 ProtectSystem=full
-ProtectHome=read-only
+ProtectHome=no
 PrivateTmp=true
+ReadWritePaths=/etc/tor /etc/resolv.conf
 
 [Install]
 WantedBy=multi-user.target

@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.config import safe_load_config, safe_save_config
 from core.daemon_client import AsyncDaemonWorker, DaemonClient
 from gui.fonts import load_bundled_fonts
 from gui.forensics_panel import ForensicsPanel
@@ -161,6 +162,9 @@ class MainWindow(QMainWindow):
         # Sistemde Inter kurulu olmasa bile tipografi tutarlı kalır.
         load_bundled_fonts()
 
+        self.config_path = os.path.expanduser("~/.config/anonvoid/config.json")
+        self.current_config = safe_load_config(self.config_path, fallback_to_default=True)
+
         self._current_theme = "oled"
         self._is_connected = False
         # Bir kalkan işlemi (bağlan/kes) sürerken periyodik durum yoklamasının
@@ -171,6 +175,10 @@ class MainWindow(QMainWindow):
         self._panic_armed = False
         self._mac_state = "—"
         self._forensics_state = "Beklemede"
+
+        # Durum yoklama kilit bayrağı ve arka plan işçisi
+        self._poll_in_flight = False
+        self._poll_worker = None
 
         self._init_ui()
         self._init_tray_icon()
@@ -193,7 +201,7 @@ class MainWindow(QMainWindow):
         self._clock_timer.start(1000)
         self._tick_clock()
 
-        self._poll_daemon_status()
+        QTimer.singleShot(0, self._poll_daemon_status)
 
     # ------------------------------------------------------------------
     # Arayüz kurulumu
@@ -217,18 +225,22 @@ class MainWindow(QMainWindow):
 
         self.stacked_widget = QStackedWidget(self)
         self.stacked_widget.addWidget(self._create_dashboard_page())
-        self.stacked_widget.addWidget(ForensicsPanel(self.client, self))
-        self.stacked_widget.addWidget(LeakPanel(self.client, self))
-        self.stacked_widget.addWidget(SettingsPanel(parent=self))
+        self.forensics_panel = ForensicsPanel(self.client, self)
+        self.stacked_widget.addWidget(self.forensics_panel)
+        self.leak_panel = LeakPanel(self.client, self)
+        self.stacked_widget.addWidget(self.leak_panel)
+        self.settings_panel = SettingsPanel(parent=self)
+        self.stacked_widget.addWidget(self.settings_panel)
         right.addWidget(self.stacked_widget, stretch=1)
         outer.addLayout(right, stretch=1)
 
-        for panel, page_index in ((self.stacked_widget.widget(1), 1), (self.stacked_widget.widget(2), 2)):
+        for panel in (self.forensics_panel, self.leak_panel):
             finished = getattr(panel, "cleanup_finished", None)
             if finished is not None:
                 finished.connect(lambda *_: self._poll_daemon_status())
-        self.stacked_widget.widget(3).theme_changed.connect(self.apply_theme)
-        self.page_settings = self.stacked_widget.widget(3)
+        self.settings_panel.theme_changed.connect(self.apply_theme)
+        self.settings_panel.config_saved.connect(self._on_settings_saved)
+        self.page_settings = self.settings_panel
 
     def _build_sidebar(self) -> QFrame:
         """Sol kenar çubuğunu oluşturur."""
@@ -680,12 +692,22 @@ class MainWindow(QMainWindow):
             self.activateWindow()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Kapatma isteğinde arka planda çalışmaya devam edip tepsiye küçülür."""
-        if getattr(self, "tray_icon", None) is not None and self.tray_icon.isVisible():
+        """Kapatma isteğinde sistem tepsisi tercihine göre küçülür veya kapanır."""
+        close_to_tray = self.current_config.get("gui", {}).get("close_to_tray", True)
+        if close_to_tray and getattr(self, "tray_icon", None) is not None and self.tray_icon.isVisible():
             self.hide()
             event.ignore()
             return
         event.accept()
+
+    def _on_settings_saved(self, new_config: Optional[Dict[str, Any]] = None) -> None:
+        """Ayarlar paneli güncellendiğinde yapılandırmayı diske kalıcı olarak kaydeder."""
+        if new_config is not None:
+            self.current_config = new_config
+        elif hasattr(self, "page_settings") and hasattr(self.page_settings, "get_current_settings"):
+            self.current_config = self.page_settings.get_current_settings()
+        config_path = getattr(self.page_settings, "config_path", self.config_path)
+        safe_save_config(config_path, self.current_config)
 
     # ------------------------------------------------------------------
     # Tema yönetimi
@@ -741,6 +763,10 @@ class MainWindow(QMainWindow):
 
     def _poll_daemon_status(self) -> None:
         """Daemon durumunu periyodik olarak sorgular ve arayüzü senkronize eder."""
+        if self._poll_in_flight:
+            return
+
+        self._poll_in_flight = True
         # İstek gönderilirkenki sürümü sakla. Yanıt geldiğinde yerel bir
         # kalkan işlemi başlamış/bitmişse bu yanıt BAYATTIR ve durum alanları
         # yazılmamalıdır.
@@ -750,6 +776,7 @@ class MainWindow(QMainWindow):
             return epoch_at_request == self._shield_epoch and not self._shield_op_in_progress
 
         def _on_success(data: Dict[str, Any]) -> None:
+            self._poll_in_flight = False
             if _still_current():
                 self._is_connected = bool(data.get("network_shield_active", False))
                 self._set_daemon_state(True)
@@ -760,6 +787,7 @@ class MainWindow(QMainWindow):
             self._update_metrics(data)
 
         def _on_error(err_msg: str) -> None:
+            self._poll_in_flight = False
             self._set_daemon_state(False, err_msg)
 
         AsyncDaemonWorker(
@@ -774,6 +802,7 @@ class MainWindow(QMainWindow):
         """Kalkan işlemini başlatır; durum yoklamasının araya girmesini engeller."""
         self._shield_op_in_progress = True
         self._shield_epoch += 1
+        self._poll_in_flight = False
 
     def _end_shield_op(self) -> None:
         """Kalkan işlemini bitirir; bu noktadan sonra yoklamalar geçerlidir."""
@@ -882,6 +911,15 @@ class MainWindow(QMainWindow):
                     f"Ağ kalkanı başlatılamadı:\n\n{reason}",
                 )
                 return
+
+            if connected:
+                # Otomatik sızıntı testi kontrolü
+                gui_cfg = self.current_config.get("gui", {})
+                if gui_cfg.get("auto_leak_test", False) or gui_cfg.get("auto_leak_test_on_connect", False):
+                    if hasattr(self, "leak_panel") and hasattr(self.leak_panel, "run_leak_test"):
+                        self.leak_panel.run_leak_test()
+                    elif hasattr(self, "leak_panel") and hasattr(self.leak_panel, "run_test"):
+                        self.leak_panel.run_test()
 
             if getattr(self, "tray_icon", None) is not None:
                 self.tray_icon.showMessage(

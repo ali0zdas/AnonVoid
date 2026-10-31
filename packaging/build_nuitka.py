@@ -60,6 +60,7 @@ def build_nuitka_command(
         "--include-package=gui",
         # Gömülü yazı tipleri ve SVG/PNG arayüz varlıkları Python paketiyle gelir.
         "--include-package-data=gui",
+        "--include-data-dir=gui/assets=gui/assets",
         "--assume-yes-for-downloads",
         "--remove-output",
     ]

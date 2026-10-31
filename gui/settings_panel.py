@@ -6,6 +6,7 @@ ve görsel tema tercihlerinin yapılandırıldığı kontrol sekmesini içerir.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -117,6 +118,15 @@ class SettingsPanel(QWidget):
         self.chk_mac_in_place = QCheckBox("MAC Değişimini Yerinde Yap (In-Place / NetworkManager Koruması)", net_group)
         net_form.addRow("", self.chk_mac_in_place)
 
+        self.chk_tor_bridges = QCheckBox("Tor Köprüleri (Bridges - obfs4) Kullanarak Bağlan", net_group)
+        net_form.addRow("", self.chk_tor_bridges)
+
+        self.chk_exclude_five_eyes = QCheckBox("Five Eyes (ABD/İngiltere/vb.) Çıkış Düğümlerini Hariç Tut", net_group)
+        net_form.addRow("", self.chk_exclude_five_eyes)
+
+        self.chk_auto_renew = QCheckBox("Otomatik Kimlik Değişimi (10 dk)", net_group)
+        net_form.addRow("", self.chk_auto_renew)
+
         container_layout.addWidget(net_group)
 
         # 2. Görünüm ve Uygulama Tercihleri
@@ -139,7 +149,25 @@ class SettingsPanel(QWidget):
         self.chk_auto_leak_test = QCheckBox("Bağlantı Kurulduğunda Otomatik Sızıntı Testi Çalıştır", app_group)
         app_form.addRow("", self.chk_auto_leak_test)
 
+        self.chk_ram_wipe_on_lock = QCheckBox("Ekran Kilitlendiğinde veya Uyku Modunda RAM Temizliği Yap", app_group)
+        app_form.addRow("", self.chk_ram_wipe_on_lock)
+
         container_layout.addWidget(app_group)
+
+        # 3. Donanım Güvenliği ve USB Kill-Switch
+        sec_group = QGroupBox("Donanım Güvenliği ve USB Kill-Switch (Dead Man's Switch)", container)
+        sec_form = QFormLayout(sec_group)
+        sec_form.setContentsMargins(16, 16, 16, 16)
+        sec_form.setSpacing(10)
+
+        self.chk_usb_killswitch = QCheckBox("USB Kill-Switch (Donanım Panik Tetikleyicisi) Etkinleştir", sec_group)
+        sec_form.addRow("", self.chk_usb_killswitch)
+
+        self.edit_usb_device_id = QLineEdit(sec_group)
+        self.edit_usb_device_id.setPlaceholderText("Örn: 1234:5678 (VendorID:ProductID)")
+        sec_form.addRow("USB Cihaz Kimliği (Yetkili Bellek):", self.edit_usb_device_id)
+
+        container_layout.addWidget(sec_group)
         container_layout.addStretch()
 
         scroll.setWidget(container)
@@ -174,6 +202,11 @@ class SettingsPanel(QWidget):
         self.chk_drop_ipv6.setChecked(net.get("drop_ipv6", True))
         self.chk_mac_randomize.setChecked(net.get("mac_randomize", True))
         self.chk_mac_in_place.setChecked(net.get("mac_in_place", True))
+        self.chk_tor_bridges.setChecked(net.get("use_bridges", False))
+        self.chk_exclude_five_eyes.setChecked(net.get("exclude_five_eyes", False))
+        self.chk_auto_renew.setChecked(
+            net.get("auto_renew_interval_sec", 0) > 0 or net.get("circuit_interval_sec", 600) == 600
+        )
 
         gui = self.config_data.get("gui", DEFAULT_CONFIG["gui"])
         current_theme = gui.get("theme", "oled")
@@ -183,36 +216,58 @@ class SettingsPanel(QWidget):
 
         self.chk_close_to_tray.setChecked(gui.get("close_to_tray", True))
         self.chk_auto_leak_test.setChecked(gui.get("auto_leak_test_on_connect", True))
+        self.chk_ram_wipe_on_lock.setChecked(gui.get("ram_suppression", False))
+
+        sec = self.config_data.get("security", DEFAULT_CONFIG.get("security", {}))
+        self.chk_usb_killswitch.setChecked(sec.get("usb_killswitch_enabled", False))
+        self.edit_usb_device_id.setText(sec.get("usb_authorized_device_id", ""))
 
     def _on_theme_selected(self) -> None:
         """Tema kutusundan yeni bir tema seçildiğinde sinyal üretir."""
         theme_key = self.combo_theme.currentData()
         self.theme_changed.emit(theme_key)
 
+    def get_current_settings(self) -> Dict[str, Any]:
+        """Arayüzdeki güncel ayarları doğrulanmış sözlük olarak döndürür."""
+        base = copy.deepcopy(self.config_data)
+        base.setdefault("network", {})
+        base.setdefault("gui", {})
+        base.setdefault("security", {})
+
+        theme_key = self.combo_theme.currentData() or "oled"
+
+        base["network"].update({
+            "tor_trans_port": self.spin_trans_port.value(),
+            "tor_dns_port": self.spin_dns_port.value(),
+            "tor_socks_port": self.spin_socks_port.value(),
+            "tor_control_port": self.spin_control_port.value(),
+            "dnscrypt_port": self.spin_dnscrypt_port.value(),
+            "circuit_interval_sec": self.spin_circuit_interval.value(),
+            "block_doh": self.chk_block_doh.isChecked(),
+            "drop_ipv6": self.chk_drop_ipv6.isChecked(),
+            "mac_randomize": self.chk_mac_randomize.isChecked(),
+            "mac_in_place": self.chk_mac_in_place.isChecked(),
+            "use_bridges": self.chk_tor_bridges.isChecked(),
+            "exclude_five_eyes": self.chk_exclude_five_eyes.isChecked(),
+            "auto_renew_interval_sec": 600 if self.chk_auto_renew.isChecked() else 0,
+        })
+        base["gui"].update({
+            "theme": theme_key,
+            "close_to_tray": self.chk_close_to_tray.isChecked(),
+            "auto_leak_test_on_connect": self.chk_auto_leak_test.isChecked(),
+            "auto_leak_test": self.chk_auto_leak_test.isChecked(),
+            "ram_suppression": self.chk_ram_wipe_on_lock.isChecked(),
+        })
+        base["security"].update({
+            "usb_killswitch_enabled": self.chk_usb_killswitch.isChecked(),
+            "usb_authorized_device_id": self.edit_usb_device_id.text().strip(),
+            "usb_panic_shutdown": self.chk_usb_killswitch.isChecked(),
+        })
+        return base
+
     def save_settings(self) -> None:
         """Arayüzdeki güncel ayarları doğrular ve güvenle diske kaydeder."""
-        theme_key = "oled"
-
-        updated_config = {
-            "network": {
-                "tor_trans_port": self.spin_trans_port.value(),
-                "tor_dns_port": self.spin_dns_port.value(),
-                "tor_socks_port": self.spin_socks_port.value(),
-                "tor_control_port": self.spin_control_port.value(),
-                "dnscrypt_port": self.spin_dnscrypt_port.value(),
-                "circuit_interval_sec": self.spin_circuit_interval.value(),
-                "block_doh": self.chk_block_doh.isChecked(),
-                "drop_ipv6": self.chk_drop_ipv6.isChecked(),
-                "mac_randomize": self.chk_mac_randomize.isChecked(),
-                "mac_in_place": self.chk_mac_in_place.isChecked(),
-            },
-            "gui": {
-                "theme": theme_key,
-                "close_to_tray": self.chk_close_to_tray.isChecked(),
-                "auto_leak_test_on_connect": self.chk_auto_leak_test.isChecked(),
-            },
-        }
-
+        updated_config = self.get_current_settings()
         try:
             safe_save_config(self.config_path, updated_config)
             self.config_data = safe_load_config(self.config_path)
