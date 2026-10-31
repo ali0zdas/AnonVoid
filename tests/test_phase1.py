@@ -10,8 +10,10 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
 sys.dont_write_bytecode = True
@@ -47,6 +49,8 @@ from core.daemon_client import (
     DaemonConnectionError,
     DaemonResponseError,
 )
+from core.netns_sandbox import run_in_tor_capsule
+from core.usb_guard import USBKillSwitchMonitor, list_usb_devices
 
 
 class TestConfigModule(unittest.TestCase):
@@ -135,6 +139,52 @@ class TestConfigModule(unittest.TestCase):
             loaded = safe_load_config(conf_path)
             self.assertEqual(loaded["network"]["tor_socks_port"], 9150)
             self.assertEqual(loaded["network"]["tor_trans_port"], 9040)  # Varsayılandan geldi
+
+    def test_validate_full_config_path_traversal_rejection(self):
+        """validate_full_config'in path traversal ve yetkisiz soket yollarını reddettiğini doğrular."""
+        traversal_inputs = [
+            "/run/../tmp/evil.sock",
+            "/run/anonvoid/../../etc/passwd",
+            "/tmp/evil.sock",
+            "/run/evil\x00.sock",
+            "/var/run/anonvoid.sock",
+        ]
+        default_sock = DEFAULT_CONFIG["daemon"]["socket_path"]
+        for bad_path in traversal_inputs:
+            cfg = {"daemon": {"socket_path": bad_path}}
+            validated = validate_full_config(cfg)
+            self.assertEqual(
+                validated["daemon"]["socket_path"],
+                default_sock,
+                f"Güvensiz soket yolu engellenemedi: {bad_path}",
+            )
+
+        # Geçerli /run yolu kabul edilmeli
+        valid_cfg = {"daemon": {"socket_path": "/run/anonvoid/custom.sock"}}
+        self.assertEqual(
+            validate_full_config(valid_cfg)["daemon"]["socket_path"],
+            "/run/anonvoid/custom.sock",
+        )
+
+    def test_validate_full_config_new_fields(self):
+        """Yeni yapılandırma alanlarının (use_bridges, exclude_five_eyes, usb_killswitch_enabled) doğrulandığını test eder."""
+        raw_cfg = {
+            "network": {
+                "use_bridges": "true",
+                "exclude_five_eyes": 1,
+                "bridge_type": "snowflake",
+            },
+            "security": {
+                "usb_killswitch_enabled": "evet",
+                "usb_authorized_device_id": "1234:abcd",
+            },
+        }
+        validated = validate_full_config(raw_cfg)
+        self.assertTrue(validated["network"]["use_bridges"])
+        self.assertTrue(validated["network"]["exclude_five_eyes"])
+        self.assertEqual(validated["network"]["bridge_type"], "snowflake")
+        self.assertTrue(validated["security"]["usb_killswitch_enabled"])
+        self.assertEqual(validated["security"]["usb_authorized_device_id"], "1234:abcd")
 
 
 class TestDaemonModule(unittest.TestCase):
@@ -290,6 +340,94 @@ class TestDaemonClientModule(unittest.TestCase):
                 "Geri çağrı arka plan iş parçacığında çalıştı; Qt bileşenlerine "
                 "farklı iş parçacığından erişilmiş olur.",
             )
+
+
+class TestUSBGuardModule(unittest.TestCase):
+    """core/usb_guard.py birim testleri."""
+
+    def test_usb_killswitch_monitor_trigger_on_removal(self):
+        """Yetkili USB aygıtı sistemden çıkarıldığında on_trigger geri çağrısının çalıştığını test eder."""
+        trigger_called = threading.Event()
+
+        def _on_trigger():
+            trigger_called.set()
+
+        monitor = USBKillSwitchMonitor(
+            authorized_device_id="0781:5583",
+            on_trigger=_on_trigger,
+            poll_interval=0.2,
+            trigger_on_removal=True,
+            trigger_on_unauthorized_insert=False,
+        )
+
+        sample_devices = [
+            {"device_id": "0781:5583", "vendor_id": "0781", "product_id": "5583"}
+        ]
+
+        # Başlangıçta aygıt takılı, ardından çıkarılmış simülasyonu (boş liste)
+        def _mock_list_devices(path=None):
+            if not trigger_called.is_set() and monitor._thread is None:
+                return sample_devices
+            return []
+
+        with mock.patch("core.usb_guard.list_usb_devices", side_effect=_mock_list_devices):
+            started = monitor.start()
+            self.assertTrue(started)
+            triggered = trigger_called.wait(timeout=2.0)
+            monitor.stop()
+
+        self.assertTrue(triggered, "USB çekilme panik tetiği ateşlenmedi!")
+
+    def test_list_usb_devices_missing_dir(self):
+        """Var olmayan sysfs yolunda boş liste döndüğünü test eder."""
+        devs = list_usb_devices("/tmp/yok_boyle_sysfs_usb_yolu")
+        self.assertEqual(devs, [])
+
+
+class TestNetNSSandboxModule(unittest.TestCase):
+    """core/netns_sandbox.py birim testleri."""
+
+    @mock.patch("core.netns_sandbox.subprocess.run")
+    @mock.patch("core.netns_sandbox.is_port_open", return_value=True)
+    def test_run_in_tor_capsule_with_torsocks(self, mock_port, mock_run):
+        """torsocks ikili dosyası mevcutken komutun torsocks ile sarmalandığını test eder."""
+        mock_run.return_value.returncode = 0
+
+        with mock.patch("shutil.which", return_value="/usr/bin/torsocks"):
+            ret = run_in_tor_capsule(
+                ["curl", "https://check.torproject.org"],
+                socks_port=9050,
+            )
+
+        self.assertEqual(ret, 0)
+        self.assertTrue(mock_run.called)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertEqual(
+            called_cmd,
+            ["/usr/bin/torsocks", "-P", "9050", "curl", "https://check.torproject.org"],
+        )
+        called_env = mock_run.call_args[1]["env"]
+        self.assertEqual(called_env.get("ALL_PROXY"), "socks5h://127.0.0.1:9050")
+
+    @mock.patch("core.netns_sandbox.subprocess.run")
+    @mock.patch("core.netns_sandbox.is_port_open", return_value=True)
+    def test_run_in_tor_capsule_fallback_env(self, mock_port, mock_run):
+        """torsocks yokken ortam değişkenleriyle doğrudan çalıştırıldığını test eder."""
+        mock_run.return_value.returncode = 0
+
+        with mock.patch("shutil.which", return_value=None):
+            ret = run_in_tor_capsule(
+                ["curl", "https://check.torproject.org"],
+                socks_port=9050,
+            )
+
+        self.assertEqual(ret, 0)
+        self.assertTrue(mock_run.called)
+        called_cmd = mock_run.call_args[0][0]
+        self.assertEqual(called_cmd, ["curl", "https://check.torproject.org"])
+        called_env = mock_run.call_args[1]["env"]
+        self.assertEqual(called_env.get("ALL_PROXY"), "socks5h://127.0.0.1:9050")
+        self.assertEqual(called_env.get("HTTP_PROXY"), "socks5h://127.0.0.1:9050")
 
 
 if __name__ == "__main__":

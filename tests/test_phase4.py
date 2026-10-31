@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -306,6 +307,75 @@ class TestForensicsPanel(unittest.TestCase):
         selected_all = panel.get_selected_targets()
         self.assertTrue(selected_all["clean_shell_history"])
         self.assertTrue(selected_all["free_space_zeroing"])
+
+    def test_forensics_panel_components(self):
+        """ForensicsPanel üzerinde lbl_exposure_score ve btn_sanitize_metadata bileşenlerinin mevcut olduğunu doğrular."""
+        from PyQt6.QtWidgets import QLabel, QPushButton
+        client = DaemonClient(_UNUSED_SOCKET_PATH)
+        panel = ForensicsPanel(client)
+
+        self.assertTrue(hasattr(panel, "lbl_exposure_score"), "lbl_exposure_score bileşeni bulunamadı")
+        self.assertIsInstance(panel.lbl_exposure_score, QLabel)
+
+        self.assertTrue(hasattr(panel, "btn_sanitize_metadata"), "btn_sanitize_metadata bileşeni bulunamadı")
+        self.assertIsInstance(panel.btn_sanitize_metadata, QPushButton)
+        self.assertIn("META VERİ", panel.btn_sanitize_metadata.text().upper())
+
+    def test_quick_preset_only_selects_fast_modules(self):
+        """Hızlı ön ayarı yalnızca ilk dört modülü seçmelidir."""
+        client = DaemonClient(_UNUSED_SOCKET_PATH)
+        panel = ForensicsPanel(client)
+
+        panel._apply_quick_preset()
+        targets = panel.get_selected_targets()
+
+        self.assertTrue(targets["clean_shell_history"])
+        self.assertTrue(targets["clean_memory_caches"])
+        self.assertFalse(targets["ssd_trim"])
+        self.assertFalse(targets["free_space_zeroing"])
+        self.assertFalse(targets["clean_swap"])
+
+    def test_slow_modules_show_warning_strip(self):
+        """Uzun süren modül seçildiğinde uyarı şeridi görünür olmalıdır."""
+        client = DaemonClient(_UNUSED_SOCKET_PATH)
+        panel = ForensicsPanel(client)
+
+        panel._clear_selection()
+        self.assertTrue(panel.warning_strip.isHidden())
+
+        panel.chk_zero_space.setChecked(True)
+        self.assertFalse(panel.warning_strip.isHidden())
+
+        panel.chk_zero_space.setChecked(False)
+        self.assertTrue(panel.warning_strip.isHidden())
+
+
+class TestSettingsPanel(unittest.TestCase):
+    """gui/settings_panel.py testleri."""
+
+    def test_settings_panel_get_current_settings(self):
+        """get_current_settings() içinde use_bridges, exclude_five_eyes ve usb_killswitch_enabled alanlarının döndüğünü doğrular."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = os.path.join(tmp, "test_config.json")
+            panel = SettingsPanel(config_path=conf_path)
+
+            panel.chk_tor_bridges.setChecked(True)
+            panel.chk_exclude_five_eyes.setChecked(True)
+            panel.chk_usb_killswitch.setChecked(True)
+
+            settings = panel.get_current_settings()
+
+            self.assertIn("network", settings)
+            self.assertIn("security", settings)
+
+            self.assertIn("use_bridges", settings["network"])
+            self.assertTrue(settings["network"]["use_bridges"])
+
+            self.assertIn("exclude_five_eyes", settings["network"])
+            self.assertTrue(settings["network"]["exclude_five_eyes"])
+
+            self.assertIn("usb_killswitch_enabled", settings["security"])
+            self.assertTrue(settings["security"]["usb_killswitch_enabled"])
 
 
 class TestMainWindow(unittest.TestCase):

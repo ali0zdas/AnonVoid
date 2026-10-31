@@ -12,7 +12,7 @@
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" /></a>
     <a href="https://www.kali.org/"><img src="https://img.shields.io/badge/Distro-Kali%20%7C%20Debian%20%7C%20Arch%20%7C%20Fedora-557C94?style=for-the-badge&logo=linux&logoColor=white" alt="Distributions" /></a>
     <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Security-Zero_Self--Footprint-00d4ff?style=for-the-badge" alt="Zero Self-Footprint" /></a>
-    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Tests-90%2F90_Passing-brightgreen?style=for-the-badge" alt="Tests Passing" /></a>
+    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Tests-128%2F128_Passing-brightgreen?style=for-the-badge" alt="Tests Passing" /></a>
   </p>
 
   <p align="center">
@@ -64,14 +64,19 @@ Geleneksel temizlik araçlarının aksine AnonVoid, **kendisinin sistemde adli i
 
 ### 1. Adli İz ve Sistem Temizlik Motoru (Forensics Core)
 * **Shell & Terminal Geçmişi Hijyeni:** `bash`, `zsh`, `fish`, `python`, `mysql`, `psql` ve `node` geçmiş dosyaları rastgele baytlar (`/dev/urandom`) ve sıfır (`0x00`) ile çok aşamalı ezilerek (`shred`) diskten silinir.
+* **Gelişmiş Meta Veri ve EXIF İmhası:** Harici bağımlılık olmadan saf Python ile PNG (`tEXt`, `zTXt`, `iTXt`, `eXIf`, `tIME`) ve JPEG (`APP1/EXIF`, `APP13/IPTC`, `COM`) bloklarını güvenle temizler; sembolik bağları (`O_NOFOLLOW`) reddeder.
+* **Canlı Adli Maruziyet Radarı (Forensic Exposure Radar):** Salt-okunur modda geçmiş satırlarını, thumbnail ve önbellek boyutlarını analiz ederek 0-100 arası anlık risk puanı ve seviyesi (`DÜŞÜK`, `ORTA`, `YÜKSEK`, `KRİTİK`) üretir.
 * **Sistem Günlükleri:** `systemd-journald` logları vakumlanır, `/var/log/*` rotasyon kalıntıları temizlenir, `wtmp`, `btmp` ve `lastlog` oturum kayıtları hijyenik hale getirilir.
 * **Masaüstü Artefaktları & Önbellekler:** XDG küçük resimleri (`thumbnails`), son kullanılan dosyalar (`recently-used.xbel`), Çöp Kutusu (`Trash`), Chromium ve Firefox disk önbellekleri temizlenir.
-* **RAM ve Bellek Hijyeni:** `drop_caches` ile Linux sayfa önbellekleri (pagecache, dentries, inodes) boşaltılır; `compact_memory` çalıştırılır; takas alanı (`swapoff`) sıfırlanarak yeniden devreye alınır.
+* **RAM ve Bellek Hijyeni:** `drop_caches` ile Linux sayfa önbellekleri (pagecache, dentries, inodes) boşaltılır; `compact_memory` çalıştırılır; takas alanı (`swapoff`) sıfırlanarak yeniden devreye alınır; `prctl(PR_SET_DUMPABLE, 0)` ile ptrace ve bellek dökümü engellenir.
 * **Depolama & SSD/NVMe Blok Yönetimi:** SSD donanım tespiti (`/sys/block`), FTL aşınma dengelemesini aşmak üzere `fstrim -av` tetiklemesi ve dosya sistemi boş alan sıfırlama (free-space zeroing).
 * **Paket Yöneticisi & Sandbox:** APT, Pacman, DNF, Zypper paket kalıntıları ile Flatpak ve Snap sandbox artıklarının temizlenmesi.
 
 ### 2. Ağ ve Gizlilik Omurgası (Network Stack)
-* **nftables / iptables Çekirdek Duvarı:** Tüm giden TCP trafiği Tor `TransPort` (9040), tüm giden DNS trafiği Tor `DNSPort` (5300) yönlendirmesine tabi tutulur.
+* **nftables / iptables Çekirdek Duvarı:** Tüm giden TCP trafiği Tor `TransPort` (9040), tüm giden DNS trafiği Tor `DNSPort` (5300) yönlendirmesine tabi tutulur; DNS yönlendirmesi yerel LAN istisnasından önce işletilir.
+* **UDP & ICMP Kaçış Koruması:** WebRTC STUN ve QUIC kaynaklı veri sızıntılarını önlemek için çıkış zincirinde tüm UDP ve ICMP paketleri (`drop`) engellenir.
+* **Uygulama Bazlı Tor Kapsülü (NetNS Sandbox & Torsocks):** Tüm sistemi Tor'a yönlendirmeden tek bir komutu veya uygulamayı izole Tor ağ kafesinde çalıştırır (`anonvoid --exec <komut>`); root yetkilerini hedef UID'ye düşürür.
+* **Tor Köprüleri & Five Eyes Muafiyeti:** `obfs4` ve `snowflake` pluggable transports köprüleri ile sansür aşımı; Five Eyes (`{us},{gb},{ca},{au},{nz}`) gözetim ittifakı çıkış düğümlerini hariç tutma seçeneği.
 * **DoH / DoT Sızıntı Kalkanı:** 1.1.1.1, 8.8.8.8, 9.9.9.9 gibi genel DoH sağlayıcılarının 443 portu çekirdek seviyesinde `DROP` edilir.
 * **IPv6 Koruması:** IPv6 üzerinden oluşabilecek kimlik ve coğrafi sızıntılar `ip6 table` üzerinden tüm giden trafiğin bloklanmasıyla engellenir.
 * **Döngü (Routing Loop) Engeli:** `meta skuid debian-tor -> accept` kuralı ile Tor servisinin kendi trafiği muaf tutulur.
@@ -79,12 +84,12 @@ Geleneksel temizlik araçlarının aksine AnonVoid, **kendisinin sistemde adli i
 * **In-Place MAC Sahteleme:** NetworkManager ile yarış durumuna girmeden ağ bağdaştırıcısının MAC adresi yerinde sahtelenir.
 * **Canlı Sızıntı Testi:** IP adresi, ISP, WebRTC, DNS ve Tor çıkış düğümü tek tuşla taranıp puanlanır.
 
-### 3. Taktiksel Acil Durum / Panik Protokolü (Nuke)
-Tehlike anında arayüzdeki acil durum butonuna basıldığında veya CLI üzerinden `--panic` tetiklendiğinde:
+### 3. Taktiksel Acil Durum & Donanımsal Kill-Switch (Nuke & Dead Man's Switch)
+Tehlike anında arayüzdeki acil durum butonuna basıldığında, CLI üzerinden `--panic` tetiklendiğinde veya yetkili USB güvenlik anahtarı fiziksel olarak çekildiğinde (`core/usb_guard.py`):
 1. nftables/iptables kuralları anında tüm dış ağ trafiğini dondurur (`DROP all`).
 2. Aktif terminal oturumu ve shell geçmişi sıfırlanır.
 3. Linux RAM önbellekleri serbest bırakılır.
-4. Tercihe bağlı olarak sistem güvenli şekilde anında kapatılır.
+4. Tercihe bağlı olarak sistem güvenli şekilde anında kapatılır (Panic Shutdown).
 
 ---
 
@@ -118,9 +123,11 @@ AnonVoid, ayrıcalıksız kullanıcı arayüzü ile sistem yetkilerine sahip ark
 |     +----------------------------------------------------+               |
 |            |                                      |                      |
 |            v                                      v                      |
-|  [ core/forensics/ ]                     [ core/network/ ]               |
+|  [ core/forensics/ ]                     [ core/network/ & core/ ]       |
 |  - lowlevel (libc memset/mlock)          - firewall (nftables/iptables)  |
-|  - shell (urandom shred)                 - tor (TransPort/DNSPort)       |
+|  - metadata (PNG/JPEG EXIF strip)        - tor (Bridges/Five Eyes)       |
+|  - manager (Exposure Radar)              - netns_sandbox (Tor Capsule)   |
+|  - shell (urandom shred)                 - usb_guard (Dead Man's Switch) |
 |  - logs (journal vacuum/logrotate)       - dnscrypt (DNSCrypt-proxy)     |
 |  - memory (drop_caches/swapoff)          - mac (In-place OUI spoofing)   |
 |  - storage (fstrim/zero_free_space)      - panic (Emergency Nuke)        |
@@ -189,13 +196,26 @@ anonvoid
 # Arka planda servis bırakmadan tüm geçmişi, logları ve önbellekleri siler
 anonvoid --wipe
 
-# 3. Terminal Üzerinden Canlı Sızıntı Testi
+# 3. Tek Bir Komutu İzole Tor Kapsülünde Çalıştırma (NetNS / Torsocks)
+anonvoid --exec curl https://check.torproject.org
+
+# 4. Adli Maruziyet ve İz Analizi Taraması (Salt-okunur 0-100 Risk Skoru)
+anonvoid --scan-exposure
+
+# 5. Dosya veya Dizin Meta Verilerini (EXIF / GPS / PNG) Atomik Olarak Temizleme
+anonvoid --sanitize-meta /hedef/fotograf_veya_belge.png
+
+# 6. Terminal Üzerinden Ağ Kalkanını Başlatma / Kapatma
+anonvoid --connect
+anonvoid --disconnect
+
+# 7. Terminal Üzerinden Canlı Sızıntı Testi
 anonvoid --leak-test
 
-# 4. Acil Durum Panik Modu (Ağı Dondur, Belleği Sıfırla)
+# 8. Acil Durum Panik Modu (Ağı Dondur, Belleği Sıfırla)
 anonvoid --panic
 
-# 5. Root Daemon Servisini Elle Çalıştırma (Systemd dışında)
+# 9. Root Daemon Servisini Elle Çalıştırma (Systemd dışında)
 sudo anonvoid --service
 ```
 
@@ -203,7 +223,7 @@ sudo anonvoid --service
 
 ## 🧪 Birim Testler ve Doğrulama
 
-AnonVoid kod tabanı; IPC haberleşmesi, şema güvenliği, adli temizlik çağrıları, ağ duvarı kuralları ve paketleme yapılarını kapsayan **90 adet kapsamlı birim test** ile korunmaktadır:
+AnonVoid kod tabanı; IPC haberleşmesi, şema güvenliği, adli temizlik çağrıları, ağ duvarı kuralları, meta veri temizliği, USB kill-switch ve paketleme yapılarını kapsayan **128 adet kapsamlı birim test** ile korunmaktadır:
 
 ```bash
 # Tüm birim test paketini çalıştırma (bytecode üretmeden)

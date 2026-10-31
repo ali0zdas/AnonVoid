@@ -76,6 +76,32 @@ class TestFirewallEngine(unittest.TestCase):
         self.assertIn("1.1.1.1", ruleset)  # DoH engeli
         self.assertIn("8.8.8.8", ruleset)  # DoH engeli
 
+    def test_dns_redirect_precedes_lan_exception_in_nat_output(self):
+        """nat_output zincirinde dport 53 redirect kuralının ip daddr LAN istisnasından ÖNCE geldiğini doğrular."""
+        ruleset = self.fw.build_nft_ruleset(trans_port=9040, dns_port=5300)
+        self.assertIn("chain nat_output", ruleset)
+        nat_part = ruleset.split("chain nat_output")[1]
+
+        dns_redirect_idx = nat_part.find("udp dport 53 redirect to :5300")
+        lan_return_idx = nat_part.find("ip daddr {")
+
+        self.assertNotEqual(dns_redirect_idx, -1, "nat_output içinde DNS yönlendirme kuralı bulunamadı")
+        self.assertNotEqual(lan_return_idx, -1, "nat_output içinde LAN istisna kuralı bulunamadı")
+        self.assertLess(
+            dns_redirect_idx,
+            lan_return_idx,
+            "DNS yönlendirme kuralı LAN istisnasından ÖNCE gelmelidir; aksi halde yerel DNS LAN kuralına takılır!",
+        )
+
+    def test_output_drops_udp_and_icmp(self):
+        """chain output içinde meta l4proto udp drop ve meta l4proto icmp drop kurallarının bulunduğunu doğrular."""
+        ruleset = self.fw.build_nft_ruleset(trans_port=9040, dns_port=5300)
+        self.assertIn("chain output {", ruleset)
+        output_part = ruleset.split("chain output {")[1].split("chain nat_output")[0]
+
+        self.assertIn("meta l4proto udp drop", output_part, "UDP paketlerini düşüren kural output zincirinde yok")
+        self.assertIn("meta l4proto icmp drop", output_part, "ICMP paketlerini düşüren kural output zincirinde yok")
+
 
 class TestTorManager(unittest.TestCase):
     """core/network/tor.py testleri."""
@@ -91,6 +117,33 @@ class TestTorManager(unittest.TestCase):
         self.assertIn("VirtualAddrNetworkIPv4 10.192.0.0/10", content)
         self.assertIn("AutomapHostsOnResolve 1", content)
         self.assertIn("AvoidDiskWrites 1", content)
+
+    def test_bridges_and_five_eyes_directives(self):
+        """use_bridges (obfs4 / snowflake) ve exclude_five_eyes verildiğinde ilgili direktiflerin üretildiğini doğrular."""
+        mgr = TorManager()
+
+        # 1. obfs4 + exclude_five_eyes
+        torrc_obfs4 = mgr.generate_torrc_content(
+            use_bridges=True,
+            bridge_type="obfs4",
+            exclude_five_eyes=True,
+        )
+        self.assertIn("UseBridges 1", torrc_obfs4)
+        self.assertIn("ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy", torrc_obfs4)
+        self.assertIn("ExcludeExitNodes", torrc_obfs4)
+        self.assertIn("StrictNodes 1", torrc_obfs4)
+
+        # 2. snowflake + exclude_five_eyes
+        torrc_snowflake = mgr.generate_torrc_content(
+            use_bridges=True,
+            bridge_type="snowflake",
+            exclude_five_eyes=True,
+        )
+        self.assertIn("UseBridges 1", torrc_snowflake)
+        self.assertIn("ClientTransportPlugin snowflake exec /usr/bin/snowflake-client", torrc_snowflake)
+        self.assertIn("Bridge ", torrc_snowflake)
+        self.assertIn("ExcludeExitNodes", torrc_snowflake)
+        self.assertIn("StrictNodes 1", torrc_snowflake)
 
     def test_does_not_clobber_existing_torrc(self):
         """Mevcut torrc EZİLMEMELİ; yalnızca eksik direktifler eklenmeli.

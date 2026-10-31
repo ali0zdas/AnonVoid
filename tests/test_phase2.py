@@ -7,9 +7,12 @@ log yönetimi, önbellek/MRU temizliği, bellek hijyeni ve ForensicsManager orke
 from __future__ import annotations
 
 import os
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
+from unittest import mock
 
 # Adli iz bırakmayı önlemek için Python bytecode üretimini kesinlikle engelle
 sys.dont_write_bytecode = True
@@ -27,10 +30,16 @@ from core.forensics.cache import (
 )
 from core.forensics.logs import clean_auth_and_session_logs, vacuum_journal_logs
 from core.forensics.lowlevel import (
+    disable_coredumps_and_ptrace,
     secure_wipe_bytearray,
     secure_zero_memory,
     shred_file,
     sync_disks,
+)
+from core.forensics.metadata import (
+    _sanitize_jpeg_bytes,
+    _sanitize_png_bytes,
+    sanitize_file_metadata,
 )
 from core.forensics.manager import ForensicsManager
 from core.forensics.memory import drop_ram_caches, get_active_swap_devices
@@ -70,6 +79,14 @@ class TestLowLevelForensics(unittest.TestCase):
             "anonvoid-test-var-olmayan-hedef.bin",
         )
         self.assertFalse(shred_file(missing))
+
+    def test_disable_coredumps_and_ptrace(self):
+        """disable_coredumps_and_ptrace fonksiyonunun güvenle çalıştığını test eder."""
+        try:
+            res = disable_coredumps_and_ptrace()
+            self.assertIsInstance(res, bool)
+        except Exception as err:
+            self.fail(f"disable_coredumps_and_ptrace beklenmedik hata fırlattı: {err}")
 
 
 class TestShellForensics(unittest.TestCase):
@@ -228,6 +245,128 @@ class TestForensicsManager(unittest.TestCase):
             self.assertFalse(os.path.exists(bash_file))
             self.assertTrue(len(progress_logs) > 0)
             self.assertEqual(progress_logs[-1][0], 100)  # Son ilerleme %100 olmalı
+
+    def test_scan_forensic_exposure_read_only(self):
+        """scan_forensic_exposure fonksiyonunun salt-okunur olarak risk skoru ve seviyesi ürettiğini doğrular."""
+        with tempfile.TemporaryDirectory() as fake_home:
+            # Örnek geçmiş dosyaları ve küçük resimler oluştur
+            bash_path = os.path.join(fake_home, ".bash_history")
+            with open(bash_path, "w", encoding="utf-8") as f:
+                f.write("whoami\nls -la\nssh user@remote.corp\n")
+
+            thumb_dir = os.path.join(fake_home, ".cache", "thumbnails", "normal")
+            os.makedirs(thumb_dir, exist_ok=True)
+            thumb_file = os.path.join(thumb_dir, "preview123.png")
+            with open(thumb_file, "wb") as f:
+                f.write(b"SAMPLE_THUMBNAIL_BYTES")
+
+            manager = ForensicsManager()
+            report = manager.scan_forensic_exposure(target_home=fake_home)
+
+            self.assertIsInstance(report, dict)
+            self.assertIn("risk_score", report)
+            self.assertIn("risk_level", report)
+            self.assertTrue(0 <= report["risk_score"] <= 100)
+            self.assertIn(report["risk_level"], ["DÜŞÜK", "ORTA", "YÜKSEK", "KRİTİK"])
+            self.assertEqual(report["shell_history_lines"], 3)
+            self.assertEqual(report["thumbnail_count"], 1)
+
+            # Salt-okunur doğrulama: hiçbir dosya silinmemiş veya değiştirilmemiş olmalıdır
+            self.assertTrue(os.path.exists(bash_path), "Shell geçmiş dosyası silinmemelidir (salt-okunur tarama)")
+            self.assertTrue(os.path.exists(thumb_file), "Thumbnail dosyası silinmemelidir (salt-okunur tarama)")
+
+
+class TestMetadataSanitizer(unittest.TestCase):
+    """core/forensics/metadata.py testleri."""
+
+    def _generate_test_png(self, include_text_chunk: bool = True) -> bytes:
+        header = b"\x89PNG\r\n\x1a\n"
+        ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+        ihdr_chunk = (
+            struct.pack(">I", len(ihdr_data))
+            + b"IHDR"
+            + ihdr_data
+            + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr_data))
+        )
+        chunks = [ihdr_chunk]
+
+        if include_text_chunk:
+            text_data = b"Author\x00AnonVoidForensicTest"
+            text_chunk = (
+                struct.pack(">I", len(text_data))
+                + b"tEXt"
+                + text_data
+                + struct.pack(">I", zlib.crc32(b"tEXt" + text_data))
+            )
+            chunks.append(text_chunk)
+
+        idat_data = zlib.compress(b"\x00\x00")
+        idat_chunk = (
+            struct.pack(">I", len(idat_data))
+            + b"IDAT"
+            + idat_data
+            + struct.pack(">I", zlib.crc32(b"IDAT" + idat_data))
+        )
+        chunks.append(idat_chunk)
+
+        iend_chunk = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND"))
+        chunks.append(iend_chunk)
+
+        return header + b"".join(chunks)
+
+    def _generate_test_jpeg(self) -> bytes:
+        soi = b"\xFF\xD8"
+        app1_payload = b"Exif\x00\x00AnonVoidCameraTest"
+        app1_len = len(app1_payload) + 2
+        app1 = b"\xFF\xE1" + struct.pack(">H", app1_len) + app1_payload
+        sos = b"\xFF\xDA\x00\x02\x00\xFF\xD9"
+        return soi + app1 + sos
+
+    def test_strip_png_metadata_bytes(self):
+        """PNG tEXt chunk'larının _sanitize_png_bytes tarafından başarıyla ayıklandığını doğrular."""
+        raw_png = self._generate_test_png(include_text_chunk=True)
+        self.assertIn(b"tEXt", raw_png)
+        self.assertIn(b"AnonVoidForensicTest", raw_png)
+
+        cleaned, count, bytes_removed = _sanitize_png_bytes(raw_png)
+        self.assertEqual(count, 1)
+        self.assertGreater(bytes_removed, 0)
+        self.assertNotIn(b"tEXt", cleaned)
+        self.assertNotIn(b"AnonVoidForensicTest", cleaned)
+        self.assertTrue(cleaned.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertIn(b"IHDR", cleaned)
+        self.assertIn(b"IEND", cleaned)
+
+    def test_strip_jpeg_metadata_bytes(self):
+        """JPEG APP1 (EXIF) segmentlerinin _sanitize_jpeg_bytes tarafından temizlendiğini doğrular."""
+        raw_jpeg = self._generate_test_jpeg()
+        self.assertIn(b"\xFF\xE1", raw_jpeg)
+        self.assertIn(b"AnonVoidCameraTest", raw_jpeg)
+
+        cleaned, count, bytes_removed = _sanitize_jpeg_bytes(raw_jpeg)
+        self.assertEqual(count, 1)
+        self.assertGreater(bytes_removed, 0)
+        self.assertNotIn(b"\xFF\xE1", cleaned)
+        self.assertNotIn(b"AnonVoidCameraTest", cleaned)
+        self.assertTrue(cleaned.startswith(b"\xFF\xD8"))
+        self.assertTrue(cleaned.endswith(b"\xFF\xD9"))
+
+    def test_sanitize_file_metadata_png_file(self):
+        """sanitize_file_metadata fonksiyonunun gerçek dosya üzerinde atomik temizlik yaptığını doğrular."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            png_file = os.path.join(tmpdir, "test_photo.png")
+            with open(png_file, "wb") as f:
+                f.write(self._generate_test_png(include_text_chunk=True))
+
+            res = sanitize_file_metadata(png_file)
+            self.assertTrue(res["success"])
+            self.assertEqual(res["method"], "pure_python_png")
+            self.assertEqual(res["tags_or_chunks_removed"], 1)
+
+            with open(png_file, "rb") as f:
+                content = f.read()
+            self.assertNotIn(b"tEXt", content)
+            self.assertNotIn(b"AnonVoidForensicTest", content)
 
 
 if __name__ == "__main__":

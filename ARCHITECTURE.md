@@ -43,12 +43,14 @@ Bu doküman, AnonVoid (Tümleşik Ayak İzi ve Ağ Gizliliği Aracı) projesinin
 |          v                                            v                 |
 |   +--------------------------+         +----------------------------+   |
 |   | ADLİ TEMİZLİK ÇEKİRDEĞİ  |         | AĞ VE GİZLİLİK ÇEKİRDEĞİ   |   |
-|   | (core/forensics/)        |         | (core/network/)            |   |
+|   | (core/forensics/)        |         | (core/network/ & core/)    |   |
 |   | - Shell History Wipe     |         | - Tor Transparent Proxy    |   |
 |   | - Log Vacuum (journald)  |         | - nftables Firewall Engine |   |
 |   | - MRU & Cache Sanitizer  |         | - DNSCrypt & resolvectl    |   |
-|   | - Memory & Swap Zeroize  |         | - DoH Block & IPv6 Drop    |   |
-|   | - SSD TRIM & blkdiscard  |         | - MAC Randomizer           |   |
+|   | - Metadata & EXIF Strip  |         | - DoH Block & IPv6 Drop    |   |
+|   | - Memory & Swap Zeroize  |         | - MAC Randomizer           |   |
+|   | - Exposure Risk Radar    |         | - Tor Capsule Sandbox      |   |
+|   | - SSD TRIM & blkdiscard  |         | - USB Guard Kill-Switch    |   |
 |   | - ctypes / libc.so.6     |         | - Adli Sızıntı Testleri    |   |
 |   +--------------------------+         +----------------------------+   |
 +-------------------------------------------------------------------------+
@@ -66,34 +68,35 @@ Proje, **sertleştirilmiş (hardened)** kurumsal siber güvenlik prensiplerine g
    * String parametreler sıkı regex karakter kontrollerinden geçirilir.
 2. **Çekirdek Düzeyinde Kimlik Tespiti (`SO_PEERCRED`):** İstemcinin sokete bağlandığı andaki gerçek `uid` ve `gid` değerleri Linux çekirdeğinden okunur. Kullanıcının masaüstü oturumu (`$XDG_RUNTIME_DIR`, `$HOME`) bu kimlikle ilişkilendirilir.
 3. **Katı Beyaz Liste Protokolü (Whitelisting):**
-   * Daemon sadece şu standart komutları kabul eder: `ping`, `connect <json>`, `disconnect`, `clean_forensics <json>`, `new_circuit`, `leak_test`, `panic`, `status`.
+   * Daemon sadece şu standart komutları kabul eder: `ping`, `connect <json>`, `disconnect`, `clean_forensics <json>`, `new_circuit`, `leak_test`, `scan_exposure`, `sanitize_metadata <json>`, `panic`, `status`.
    * Raw komut satırı veya shell script enjeksiyonu mimari olarak imkansızdır.
-4. **Başlangıçta Kendi Kendini İyileştirme (Startup Self-Heal):**
+4. **Soket Yolu ve Dizin Doğrulaması (Path Traversal Koruması):**
+   * Daemon soketi yalnızca `/run/` altında kabul edilir; `..` traversal dizilimleri veya null (`\x00`) baytları kesinlikle reddedilir.
+5. **Başlangıçta Kendi Kendini İyileştirme (Startup Self-Heal):**
    * Sistem veya daemon kazaen kapandığında askıda kalan `anonvoid` / `fp-cleaner` nftables tabloları temizlenir.
    * `systemd-resolved` ve `/etc/resolv.conf` ayarları orijinal durumuna getirilir.
    * Yetim Tor süreçleri ve kilit dosyaları (`.lock`) süpürülür.
 
 ---
 
-## 3. İki Aşamalı Yaşam Döngüsü (Dual-Mode Lifecycle)
+## 3. Çok Aşamalı Yaşam Döngüsü (Multi-Mode Lifecycle)
 
-Uygulama iki temel senaryoda çalışacak şekilde kurgulanmıştır:
+Uygulama temel senaryolarda çalışacak şekilde kurgulanmıştır:
 
 ### A. Taktiksel / Anlık Temizlik Modu (Clean & Exit)
-* **Amaç:** Kullanıcının pentest veya gizli çalışma sonrasında arkasında hiçbir iz bırakmadan sistemi temizlemesi.
-* **Akış:**
-  1. Kullanıcı GUI'yi açar veya CLI parametresi verir (`anonvoid --wipe`).
-  2. Modüller yürütülür (Shell geçmişi, log vakumlama, son dosyalar, swap/RAM temizliği, SSD TRIM).
-  3. Temizlik tamamlandığında uygulama `sys.exit(0)` ile kapanır.
-  4. Arkasında aktif hiçbir arka plan servisi veya RAM tüketimi bırakmaz.
+* **Amaç:** Kullanıcının pentest veya gizli çalışma sonrasında arkasında hiçbir iz bırakmadan sistemi temizlemesi (`anonvoid --wipe`).
+* **Akış:** Shell geçmişi, log vakumlama, son dosyalar, swap/RAM temizliği, SSD TRIM çalışır ve `sys.exit(0)` ile kapanır.
 
 ### B. Aktif Gizlilik Oturumu Modu (Active Shield)
 * **Amaç:** Canlı internet bağlantısında Tor şeffaf proxy, DNSCrypt ve Kill-Switch koruması sağlamak.
-* **Akış:**
-  1. Kullanıcı istediği servisleri (Tor, DNSCrypt, I2P) seçip **CONNECT** butonuna basar.
-  2. Firewall kuralları girilir, IPv6 kapatılır, DoH sunucuları engellenir, MAC adresi randomize edilir.
-  3. İstenirse uygulama sistem tepsisine (system tray) küçülür.
-  4. **DISCONNECT** dendiğinde tüm kurallar geri alınır, oturum izleri temizlenir ve kalkan güvenle iner.
+* **Akış:** Firewall kuralları girilir, IPv6 kapatılır, DoH sunucuları engellenir, MAC adresi randomize edilir. Disconnect dendiğinde tüm kurallar geri alınır.
+
+### C. Uygulama Bazlı Tor Kapsülü (NetNS Sandbox & Torsocks)
+* **Amaç:** Tüm sistemi Tor'a yönlendirmeden tek bir komutu veya uygulamayı izole Tor ağ kafesinde çalıştırmak (`anonvoid --exec <komut>`).
+* **Akış:** SOCKS5h ortam değişkenleri veya `torsocks` ile DNS/TCP sızıntısız sarmalama yapılır; root yetkileri hedef kullanıcının UID/GID'sine düşürülür.
+
+### D. Canlı Adli Maruziyet Radarı ve Meta Veri Temizliği
+* **Amaç:** Dosyaları silmeden adli risk skoru (0-100) üretmek (`anonvoid --scan-exposure`) ve belgelerdeki EXIF/PNG meta verilerini temizlemek (`anonvoid --sanitize-meta <dosya/dizin>`).
 
 ---
 
@@ -109,32 +112,37 @@ AnonVoid/
 │   ├── NETWORK_STACK.md        # AnonVoid ağ ve gizlilik omurgası spesifikasyonu
 │   ├── FORENSICS_CLEANER.md    # Disk, bellek, log ve artefakt temizliği
 │   └── ROADMAP.md              # Adım adım geliştirme planı
-├── main.py                     # Giriş noktası (GUI veya --service)
+├── main.py                     # Giriş noktası (GUI, --service, --exec, --wipe vb.)
 ├── install.sh                  # Çoklu dağıtım kurucusu
 │   ├── core/
-│   │   ├── config.py           # Şema doğrulamalı JSON yapılandırma
+│   │   ├── config.py           # Şema doğrulamalı JSON yapılandırma & path traversal koruması
 │   │   ├── daemon.py           # Root IPC daemon servisi
 │   │   ├── daemon_client.py    # GUI soket istemcisi
+│   │   ├── usb_guard.py        # Donanımsal USB Kill-Switch & Dead Man's Switch
+│   │   ├── netns_sandbox.py    # Uygulama bazlı Tor Kapsülü & yetki düşürme
 │   │   ├── panic.py            # Acil durum nuke mekanizması
-│   │   ├── forensics/          # ADLİ İZ TEMİZLEME MODÜLLERİ
+│   │   ├── forensics/          # ADLİ İZ TEMİZLEME VE MARUZİYET MODÜLLERİ
+│   │   │   ├── manager.py      # Adli temizlik orkestratörü & Canlı Maruziyet Radarı
+│   │   │   ├── metadata.py     # Saf Python PNG/JPEG EXIF ve meta veri imha aracı
 │   │   │   ├── shell.py        # Bash, zsh, fish, python history shredder
 │   │   │   ├── logs.py         # journald vacuum & logrotate simulation
 │   │   │   ├── cache.py        # Thumbnails, MRU, recently-used, trash
 │   │   │   ├── memory.py       # Swap wipe, drop_caches, compact_memory
 │   │   │   ├── storage.py      # SSD TRIM, free space zeroing, blkdiscard
 │   │   │   ├── package_mgr.py  # APT, Pacman, DNF, Snap, Flatpak önbellekleri
-│   │   │   └── lowlevel.py     # ctypes / libc.so.6 (memset, mlock, sync)
+│   │   │   └── lowlevel.py     # ctypes / libc.so.6 (memset, mlock, sync, ptrace koruması)
 │   │   └── network/            # GELİŞMİŞ AĞ VE GİZLİLİK OMURGASI
-│   │       ├── firewall.py     # nftables/iptables, .onion split, DoH block
-│   │       ├── tor.py          # torrc patching, circuit renewal, control port
+│   │       ├── firewall.py     # nftables/iptables, .onion split, DoH block, UDP/ICMP drop
+│   │       ├── tor.py          # torrc patching, bridge desteği, Five Eyes filtresi
 │   │       ├── dnscrypt.py     # dnscrypt-proxy & resolvectl entegrasyonu
 │   │       ├── mac.py          # Akıllı in-place MAC sahteleme
 │   │       ├── leak_test.py    # Tor exit, DNS, IPv6, WebRTC testleri
-│   │       └── i2p.py          # i2pd ve redsocks şeffaf proxy desteği
+│   │       └── panic.py        # Ağ düzeyinde acil durum kill-switch
 │   └── gui/                    # KULLANICI ARAYÜZÜ (PyQt6)
 │       ├── main_window.py      # Ana pencere ve dinamik durum halkası
-│       ├── forensics_panel.py  # Temizlik seçenekleri ve ilerleme çubukları
-│       ├── settings_panel.py   # Ağ ve genel ayarlar
+│       ├── forensics_panel.py  # Temizlik seçenekleri, Maruziyet Radarı ve EXIF temizleme butonu
+│       ├── settings_panel.py   # Ağ, Tor köprüleri, Five Eyes ve USB Kill-Switch ayarları
+│       ├── leak_panel.py       # Canlı sızıntı test ekranı
 │       ├── themes.py           # 5 tema (OLED, Circuit, Light, Binary, Pixel)
 │       └── widgets.py          # Özel servis kartları ve hız göstergesi
 ```
