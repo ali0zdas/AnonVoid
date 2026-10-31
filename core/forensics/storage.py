@@ -1,9 +1,9 @@
 """AnonVoid - Modern Depolama (SSD/NVMe/HDD) ve Boş Alan Hijyeni Modülü.
 
-Bu modül; sürücü türünü (SSD/NVMe Flash veya Dönen Manyetik HDD) tespit eder,
-FTL (Flash Translation Layer) ve Aşınma Dengeleme kısıtlamalarını aşmak için
-SSD TRIM (fstrim) komutunu tetikler ve silinmiş dosya bloklarını adli veri kurtarma
-(file carving) yöntemlerine karşı boş alan sıfırlama (free-space zeroing) ile doldurur.
+Bu modül; sürücü türünü (SSD/NVMe Flash, LUKS/LVM dm- aygıtları veya Manyetik HDD) tespit eder,
+FTL (Flash Translation Layer) ve Aşınma Dengeleme kısıtlamalarını aşmak için SSD TRIM
+(fstrim) komutunu tetikler ve silinmiş dosya bloklarını adli veri kurtarma (file carving)
+yöntemlerine karşı optimize edilmiş boş alan sıfırlama (free-space zeroing) ile doldurur.
 """
 
 from __future__ import annotations
@@ -27,12 +27,15 @@ logger = logging.getLogger("AnonVoidStorage")
 def detect_storage_devices() -> List[Dict[str, Any]]:
     """Sistemdeki blok depolama aygıtlarını ve türlerini (/sys/block) tespit eder.
 
+    dm- (Device Mapper: LUKS / LVM) aygıtlarını tamamen atlamak yerine /sys/block/dm-*/slaves
+    ve /sys/block/dm-*/dm/name üzerinden fiziksel eşlemeleri ve şifreli birimleri tespit eder.
+
     rotational değeri:
       - 0: Katı Hal Sürücüsü (SSD / NVMe / eMMC Flash)
       - 1: Dönen Manyetik Disk (HDD)
 
     Returns:
-        List[Dict[str, Any]]: Bulunan disklerin listesi.
+        List[Dict[str, Any]]: Bulunan disklerin ve şifreli birimlerin listesi.
     """
     devices: List[Dict[str, Any]] = []
     sys_block = "/sys/block"
@@ -42,12 +45,34 @@ def detect_storage_devices() -> List[Dict[str, Any]]:
 
     try:
         for entry in os.listdir(sys_block):
-            # Sanal (loop, ram, dm-) aygıtları filtrele
-            if entry.startswith(("loop", "ram", "dm-", "sr", "zram")):
+            # Sanal yardımcı aygıtları (loop, ram, sr, zram) filtrele
+            if entry.startswith(("loop", "ram", "sr", "zram")):
                 continue
 
-            rot_path = os.path.join(sys_block, entry, "queue", "rotational")
-            size_path = os.path.join(sys_block, entry, "size")
+            entry_path = os.path.join(sys_block, entry)
+            is_dm = entry.startswith("dm-")
+            dm_name = None
+            slaves: List[str] = []
+
+            # Device Mapper (LUKS / LVM) aygıtları için isim ve alt fiziksel aygıtları çöz
+            if is_dm:
+                name_file = os.path.join(entry_path, "dm", "name")
+                if os.path.exists(name_file):
+                    try:
+                        with open(name_file, "r", encoding="utf-8") as f:
+                            dm_name = f.read().strip()
+                    except OSError:
+                        pass
+
+                slaves_dir = os.path.join(entry_path, "slaves")
+                if os.path.isdir(slaves_dir):
+                    try:
+                        slaves = os.listdir(slaves_dir)
+                    except OSError:
+                        pass
+
+            rot_path = os.path.join(entry_path, "queue", "rotational")
+            size_path = os.path.join(entry_path, "size")
 
             is_rotational = True
             if os.path.exists(rot_path):
@@ -67,10 +92,20 @@ def detect_storage_devices() -> List[Dict[str, Any]]:
                     pass
 
             size_gb = round((size_sectors * 512) / (1024**3), 2)
-            disk_type = "HDD (Manyetik)" if is_rotational else "SSD/NVMe (Flash)"
+            if is_dm:
+                disk_type = f"Device-Mapper ({dm_name or entry})"
+                if not is_rotational:
+                    disk_type += " [SSD-Tabanlı]"
+                else:
+                    disk_type += " [HDD-Tabanlı]"
+            else:
+                disk_type = "HDD (Manyetik)" if is_rotational else "SSD/NVMe (Flash)"
 
             devices.append({
                 "device": entry,
+                "mapped_name": dm_name,
+                "is_dm": is_dm,
+                "slaves": slaves,
                 "is_ssd": not is_rotational,
                 "disk_type": disk_type,
                 "size_gb": size_gb,
@@ -131,7 +166,7 @@ def run_ssd_trim(all_mountpoints: bool = True) -> Dict[str, Any]:
 
 def zero_free_space(
     target_dir: str = "/",
-    block_size_kb: int = 1024,
+    block_size_kb: int = 4096,
     reserve_mb: int = 200,
     max_fill_mb: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -140,6 +175,13 @@ def zero_free_space(
     Dosya sisteminde silinmiş dosya parçalarının (forensic carving) kurtarılmasını
     engellemek için geçici bir sıfır dosyası (.fp_zero_space.tmp) açılır,
     belirlenen güvenlik payı (reserve_mb) kalana kadar disk sıfırla doldurulup silinir.
+
+    Optimizasyonlar:
+      - 4096 KB (4 MB) varsayılan blok boyutu ile I/O çağrı verimi artırılır.
+      - shutil.disk_usage() her blokta çağrılmak yerine kalan alana göre uyarlanarak
+        (32 blokta bir) 500.000 syscall darboğazı engellenir.
+      - Her 64 MB yazmada bir os.fsync() uygulanarak Linux sayfa önbelleğinin (page-cache)
+        şişmesi ve bellek tükenmesi önlenir.
 
     Args:
         target_dir: Boş alanı sıfırlanacak dizin veya bağlama noktası.
@@ -166,32 +208,55 @@ def zero_free_space(
     max_fill_bytes = (max_fill_mb * 1024 * 1024) if max_fill_mb is not None else None
     temp_file = os.path.join(target_dir, f".fp_zero_space_{os.getpid()}.tmp")
 
-    zero_chunk = b"\x00" * (block_size_kb * 1024)
+    chunk_bytes = max(1024, block_size_kb * 1024)
+    zero_chunk = b"\x00" * chunk_bytes
     total_written = 0
+    blocks_written = 0
+    last_fsync_bytes = 0
 
     try:
+        usage = shutil.disk_usage(target_dir)
+        last_checked_written = 0
+
         with open(temp_file, "wb") as f:
             while True:
                 # Maksimum sınır kontrolü
                 if max_fill_bytes is not None and total_written >= max_fill_bytes:
                     break
 
-                # Kalan boş disk alanını kontrol et
-                usage = shutil.disk_usage(target_dir)
-                if usage.free <= reserve_bytes:
-                    logger.info("Güvenlik rezerv sınırına (%d MB) ulaşıldı; doldurma tamamlandı.", reserve_mb)
-                    break
+                # Syscall optimizasyonu: Kalan alana göre dinamik kontrol aralığı
+                current_free_est = usage.free - (total_written - last_checked_written)
+                if current_free_est < (128 * 1024 * 1024):
+                    check_interval = 1
+                elif current_free_est < (512 * 1024 * 1024):
+                    check_interval = 4
+                else:
+                    check_interval = 32
+
+                if blocks_written % check_interval == 0:
+                    usage = shutil.disk_usage(target_dir)
+                    last_checked_written = total_written
+                    if usage.free <= reserve_bytes:
+                        logger.info("Güvenlik rezerv sınırına (%d MB) ulaşıldı; doldurma tamamlandı.", reserve_mb)
+                        break
 
                 available_space = usage.free - reserve_bytes
                 if max_fill_bytes is not None:
                     available_space = min(available_space, max_fill_bytes - total_written)
 
-                to_write = min(len(zero_chunk), available_space)
+                to_write = min(chunk_bytes, int(available_space))
                 if to_write <= 0:
                     break
 
                 f.write(zero_chunk[:to_write])
                 total_written += to_write
+                blocks_written += 1
+
+                # Page-cache şişmesini önlemek için periyodik fsync (her 64 MB'ta bir)
+                if (total_written - last_fsync_bytes) >= (64 * 1024 * 1024):
+                    f.flush()
+                    os.fsync(f.fileno())
+                    last_fsync_bytes = total_written
 
             f.flush()
             os.fsync(f.fileno())
@@ -206,7 +271,7 @@ def zero_free_space(
         # Disk dolduğunda ENOSPC (No space left on device) normal karşılanır
         result["success"] = True
         result["bytes_written"] = total_written
-        logger.info("Disk son sınırına kadar dolduruldu: %s", err)
+        logger.info("Disk sınırına ulaşıldı (yazılan: %0.2f MB): %s", total_written / (1024 * 1024), err)
     except Exception as err:
         result["error"] = f"Boş alan sıfırlanırken hata oluştu: {err}"
     finally:

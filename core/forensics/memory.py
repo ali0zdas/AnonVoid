@@ -2,7 +2,8 @@
 
 Bu modül; RAM üzerindeki çekirdek önbelleklerini (drop_caches) serbest bırakır,
 bellek parçalanmasını giderir (compact_memory), aktif takas alanını (swap) kapatıp
-eski şifre veya oturum artıklarını urandom/sıfır baytlarla ezerek yeniden başlatır.
+eski şifre veya oturum artıklarını güvenli sıfır baytlarla ve blkdiscard ile ezerek
+yeniden başlatır. OOM Killer riskine karşı RAM/Swap doluluk oranını denetler.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import stat
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional
@@ -21,6 +23,26 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 from core.forensics.lowlevel import lock_process_memory, sync_disks
 
 logger = logging.getLogger("AnonVoidMemory")
+
+
+def _read_meminfo() -> Dict[str, int]:
+    """Linux /proc/meminfo dosyasını okuyup kB cinsinden sözlük olarak döndürür."""
+    meminfo: Dict[str, int] = {}
+    path = "/proc/meminfo"
+    if not os.path.exists(path):
+        return meminfo
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    val_parts = parts[1].strip().split()
+                    if val_parts and val_parts[0].isdigit():
+                        meminfo[k] = int(val_parts[0])
+    except Exception as err:
+        logger.warning("/proc/meminfo okunamadı: %s", err)
+    return meminfo
 
 
 def drop_ram_caches() -> Dict[str, Any]:
@@ -108,12 +130,15 @@ def get_active_swap_devices() -> List[Dict[str, Any]]:
 
 
 def clean_and_zeroize_swap() -> Dict[str, Any]:
-    """Takas (swap) alanını devre dışı bırakıp temizler ve yeniden aktifleştirir.
+    """Takas (swap) alanını OOM riskini denetleyerek kapatır, temizler ve yeniden aktifleştirir.
 
     İşlem Adımları:
-      1. swapoff -a çağrılarak tüm takas alanı kapatılır.
-      2. Swap dosyası ise güvenli sıfır yazılır veya swap bölümü mkswap ile yenilenir.
-      3. swapon -a ile temiz takas alanı geri açılır.
+      1. /proc/meminfo taranarak kullanılan swap ile MemAvailable karşılaştırılır.
+         Eğer kullanılan swap MemAvailable'ın %85'ini aşıyorsa OOM Killer riskine karşı işlem atlanır.
+      2. swapoff -a çağrılarak tüm takas alanları güvenle kapatılır.
+      3. /dev/zram* aygıtları korunur (mkswap uygulanmaz). Diğer blok aygıtlarına blkdiscard
+         ve başlık/veri sıfırlaması uygulanır; ardından mkswap ile sıfırdan oluşturulur.
+      4. swapon -a ile temiz takas alanı geri açılır.
 
     Returns:
         Dict[str, Any]: İşlem sonuçları.
@@ -123,6 +148,7 @@ def clean_and_zeroize_swap() -> Dict[str, Any]:
         "swapoff_success": False,
         "swapon_success": False,
         "swaps_detected": 0,
+        "skipped_due_to_oom_risk": False,
         "errors": [],
     }
 
@@ -133,7 +159,26 @@ def clean_and_zeroize_swap() -> Dict[str, Any]:
         logger.info("Sistemde aktif bir takas (swap) alanı bulunamadı; işlem atlanıyor.")
         return result
 
-    # 1. swapoff -a
+    # 1. OOM Killer Risk Kontrolü (/proc/meminfo)
+    meminfo = _read_meminfo()
+    if meminfo:
+        mem_available = meminfo.get("MemAvailable", 0)
+        swap_total = meminfo.get("SwapTotal", 0)
+        swap_free = meminfo.get("SwapFree", 0)
+        swap_used = max(0, swap_total - swap_free)
+
+        # Kullanılan swap miktarı mevcut RAM'in %85'inden fazlaysa swapoff sistemi kilitler
+        if mem_available > 0 and swap_used > (0.85 * mem_available):
+            msg = (
+                f"Kullanılan swap miktarı ({swap_used} kB), mevcut RAM'in ({mem_available} kB) "
+                f"%85'ini aşıyor. OOM Killer tetiklenmesini önlemek için swap temizliği güvenle atlandı."
+            )
+            logger.warning(msg)
+            result["errors"].append(msg)
+            result["skipped_due_to_oom_risk"] = True
+            return result
+
+    # 2. swapoff -a
     try:
         ret = subprocess.run(["swapoff", "-a"], capture_output=True, text=True, timeout=60, check=False)
         if ret.returncode == 0:
@@ -146,22 +191,66 @@ def clean_and_zeroize_swap() -> Dict[str, Any]:
         result["errors"].append(f"swapoff çağrısı yapılamadı: {err}")
         return result
 
-    # 2. Swap alanlarına mkswap uygula (bölüm veya dosya)
+    # 3. Swap alanlarına blkdiscard, başlık sıfırlama ve mkswap uygula
     for sw in active_swaps:
         sw_path = sw["path"]
-        if os.path.exists(sw_path):
+        if not os.path.exists(sw_path):
+            continue
+
+        # zram aygıtlarını (/dev/zram*) mkswap ile bozma (sıkıştırılmış RAM takas aygıtıdır)
+        if sw_path.startswith("/dev/zram"):
+            logger.info("zram takas aygıtı (%s) tespit edildi; mkswap uygulanmadan yapısı korunuyor.", sw_path)
+            continue
+
+        # Blok cihazı olup olmadığını kontrol et
+        is_block_dev = False
+        try:
+            st = os.stat(sw_path)
+            is_block_dev = stat.S_ISBLK(st.st_mode)
+        except OSError:
+            pass
+
+        # SSD/NVMe blok cihazı ise blkdiscard ile flash bloklarını bırak
+        if is_block_dev:
             try:
-                subprocess.run(
-                    ["mkswap", sw_path],
+                ret_discard = subprocess.run(
+                    ["blkdiscard", sw_path],
                     capture_output=True,
                     timeout=30,
                     check=False,
                 )
-                logger.info("mkswap başarıyla uygulandı: %s", sw_path)
-            except Exception as err:
-                result["errors"].append(f"mkswap uygulanamadı ({sw_path}): {err}")
+                if ret_discard.returncode == 0:
+                    logger.info("blkdiscard başarıyla uygulandı: %s", sw_path)
+            except Exception as discard_err:
+                logger.debug("blkdiscard uygulanamadı (%s): %s", sw_path, discard_err)
 
-    # 3. swapon -a
+        # Başlık ve imza alanını (ilk 1 MB) sıfır baytlarla ez
+        try:
+            with open(sw_path, "r+b") as f:
+                zero_head = b"\x00" * (1024 * 1024)
+                f.write(zero_head)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as zero_err:
+            logger.debug("Swap başlık sıfırlama uygulanamadı (%s): %s", sw_path, zero_err)
+
+        # mkswap ile temiz swap imzasını yeniden oluştur
+        try:
+            ret_mk = subprocess.run(
+                ["mkswap", sw_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if ret_mk.returncode == 0:
+                logger.info("mkswap başarıyla uygulandı: %s", sw_path)
+            else:
+                result["errors"].append(f"mkswap başarısız ({sw_path}): {ret_mk.stderr.strip()}")
+        except Exception as err:
+            result["errors"].append(f"mkswap uygulanamadı ({sw_path}): {err}")
+
+    # 4. swapon -a
     try:
         ret = subprocess.run(["swapon", "-a"], capture_output=True, text=True, timeout=30, check=False)
         if ret.returncode == 0:

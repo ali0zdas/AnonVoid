@@ -2,8 +2,9 @@
 
 Bu modül; adli inceleme araçlarında (Autopsy, Plaso, Log2Timeline) "delil karartma
 anomalisi" veya "kırmızı bayrak" uyandırmayacak biçimde sistem günlüklerini temizler.
-systemd-journald yerleşik vakumlama protokolü, logrotate simülasyonu ve oturum
-kayıtlarının (wtmp/btmp) güvenli yönetilmesini sağlar.
+systemd-journald yerleşik vakumlama protokolü, logrotate simülasyonu, oturum kayıtları
+(wtmp/btmp/lastlog), çökme/coredump raporları (/var/lib/systemd/coredump) ve paket yöneticisi
+kurulum loglarının (/var/log/dpkg.log, /var/log/apt/history.log) güvenli yönetilmesini sağlar.
 """
 
 from __future__ import annotations
@@ -32,11 +33,20 @@ AUTH_LOG_FILES: List[str] = [
     "/run/utmp",
 ]
 
-# Çökme ve Hata Rapor Dizinleri
+# Çökme ve Çekirdek Bellek Döküm (Coredump) Dizinleri/Kalıpları
 CRASH_LOG_PATTERNS: List[str] = [
     "/var/crash/*",
     "/var/log/apport.log*",
     "/var/log/core/*",
+    "/var/lib/systemd/coredump/*",
+]
+
+# Paket Yöneticisi Kurulum ve Geçmiş Günlükleri
+PACKAGE_LOG_PATTERNS: List[str] = [
+    "/var/log/dpkg.log*",
+    "/var/log/apt/history.log*",
+    "/var/log/apt/term.log*",
+    "/var/log/apt/eipp.log*",
 ]
 
 
@@ -107,10 +117,12 @@ def vacuum_journal_logs() -> Dict[str, Any]:
 def rotate_and_clean_text_logs() -> Dict[str, Any]:
     """Geleneksel /var/log metin günlüklerini logrotate ile döndürür ve arşivleri temizler.
 
+    Ayrıca /var/log/dpkg.log ve /var/log/apt/history.log paket kurulum kayıtlarını güvenle temizler.
+
     Returns:
         Dict[str, Any]: Temizlik istatistikleri.
     """
-    logger.info("/var/log metin günlükleri ve arşivleri temizleniyor...")
+    logger.info("/var/log metin günlükleri, paket kayıtları ve arşivleri temizleniyor...")
     cleaned_archives: List[str] = []
     errors: List[str] = []
 
@@ -128,24 +140,31 @@ def rotate_and_clean_text_logs() -> Dict[str, Any]:
         except Exception as err:
             errors.append(f"logrotate çağrısı yapılamadı: {err}")
 
-    # 2. Arşivlenmiş eski sıkıştırılmış logları temizle (*.gz, *.1, *.old)
+    # 2. Arşivlenmiş eski loglar ve paket yöneticisi logları (*.gz, *.1, *.old, dpkg.log, apt/history.log)
     archive_patterns = [
         "/var/log/*.gz",
         "/var/log/*.1",
         "/var/log/*.old",
         "/var/log/*/*.gz",
         "/var/log/*/*.1",
-    ]
+    ] + PACKAGE_LOG_PATTERNS
 
     for pat in archive_patterns:
         for file_path in glob.glob(pat):
             if os.path.islink(file_path):
-                continue
-            try:
-                if shred_file(file_path, passes=1, zero_fill=True, remove_after=True):
+                try:
+                    os.unlink(file_path)
                     cleaned_archives.append(file_path)
-            except Exception as err:
-                errors.append(f"{file_path} silinemedi: {err}")
+                except OSError:
+                    pass
+                continue
+
+            if os.path.isfile(file_path):
+                try:
+                    if shred_file(file_path, passes=1, zero_fill=True, remove_after=True):
+                        cleaned_archives.append(file_path)
+                except Exception as err:
+                    errors.append(f"{file_path} silinemedi: {err}")
 
     sync_disks()
 
@@ -158,24 +177,25 @@ def rotate_and_clean_text_logs() -> Dict[str, Any]:
 
 
 def clean_auth_and_session_logs() -> Dict[str, Any]:
-    """Giriş ve oturum kayıtlarını (wtmp, btmp, lastlog) güvenle temizler.
+    """Giriş, oturum ve coredump kayıtlarını (/var/log/wtmp, btmp, systemd/coredump) temizler.
 
-    Bu dosyalar tamamen silinirse sistem servisleri hata verebilir;
-    bu nedenle dosyalar boşaltılır (truncate) ve izinleri korunur.
+    Oturum dosyaları tamamen silinirse yetkilendirme servisleri bozulabileceğinden
+    dosyalar 0 bayt boyutuna çekilir (truncate) ve izinleri korunur.
+    Coredump dosyaları ise güvenle ezilerek silinir.
 
     Returns:
         Dict[str, Any]: İşlem sonuçları.
     """
-    logger.info("Oturum ve kimlik doğrulama kayıtları (wtmp/btmp/lastlog) temizleniyor...")
+    logger.info("Oturum ve kimlik doğrulama kayıtları (wtmp/btmp/lastlog/coredump) temizleniyor...")
     cleared_logs: List[str] = []
     errors: List[str] = []
 
+    # 1. Oturum kütüklerini truncate(0) ile boşalt
     for log_path in AUTH_LOG_FILES:
         if not os.path.exists(log_path):
             continue
 
         try:
-            # Dosyayı 0 bayt boyutuna çek (izinlerini ve sahipliğini koruyarak)
             with open(log_path, "wb") as f:
                 f.truncate(0)
             cleared_logs.append(log_path)
@@ -183,16 +203,23 @@ def clean_auth_and_session_logs() -> Dict[str, Any]:
         except (PermissionError, OSError) as err:
             errors.append(f"{log_path} boşaltılamadı: {err}")
 
-    # Çökme raporlarını süpür
+    # 2. Çökme ve systemd-coredump bellek dökümü raporlarını ezerek sil
     for pat in CRASH_LOG_PATTERNS:
         for fpath in glob.glob(pat):
             if os.path.islink(fpath):
-                continue
-            try:
-                if shred_file(fpath, passes=1, zero_fill=True, remove_after=True):
+                try:
+                    os.unlink(fpath)
                     cleared_logs.append(fpath)
-            except Exception as err:
-                errors.append(f"Çökme raporu silinemedi ({fpath}): {err}")
+                except OSError:
+                    pass
+                continue
+
+            if os.path.isfile(fpath):
+                try:
+                    if shred_file(fpath, passes=1, zero_fill=True, remove_after=True):
+                        cleared_logs.append(fpath)
+                except Exception as err:
+                    errors.append(f"Çökme/coredump raporu silinemedi ({fpath}): {err}")
 
     sync_disks()
 

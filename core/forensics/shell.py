@@ -1,8 +1,8 @@
 """AnonVoid - Kabuk (Shell) ve REPL Geçmişi Adli Temizlik Modülü.
 
-Bu modül; Bash, Zsh, Fish, Python, MySQL, PostgreSQL ve diğer etkileşimli kabukların
-disk üzerinde bıraktığı geçmiş (history) dosyalarını tespit eder, rastgele verilerle
-ve sıfır baytlarla ezerek (shred) adli standartlarda yok eder.
+Bu modül; Bash, Zsh, Fish, Python, GDB, Radare2, MySQL, PostgreSQL ve diğer etkileşimli
+kabukların disk üzerinde bıraktığı geçmiş (history) dosyalarını tespit eder, rastgele
+verilerle ve sıfır baytlarla ezerek (shred) adli standartlarda yok eder.
 """
 
 from __future__ import annotations
@@ -20,10 +20,22 @@ from core.forensics.lowlevel import shred_file
 
 logger = logging.getLogger("AnonVoidShell")
 
-# Hedef Shell ve CLI Geçmiş Dosyaları (Kullanıcı Ev Dizinine Göreceli)
+
+def _fix_ownership(path: str, home_dir: str) -> None:
+    """Oluşturulan dosya veya dizin sahipliğini hedef ev dizini sahibine (uid:gid) eşitler."""
+    if hasattr(os, "chown") and hasattr(os, "stat"):
+        try:
+            st = os.stat(home_dir)
+            os.chown(path, st.st_uid, st.st_gid)
+        except Exception as err:
+            logger.debug("Sahiplik düzeltilemedi (%s): %s", path, err)
+
+
+# Hedef Shell, REPL ve CLI Geçmiş Dosyaları (Kullanıcı Ev Dizinine Göreceli)
 SHELL_TARGET_FILES: List[str] = [
-    # Kabuklar
+    # Kabuklar (Shells)
     ".bash_history",
+    ".bash_sessions",
     ".zsh_history",
     ".zhistory",
     ".sh_history",
@@ -31,6 +43,7 @@ SHELL_TARGET_FILES: List[str] = [
     ".local/share/fish/fish_history",
     # Yorumlayıcılar ve REPL
     ".python_history",
+    ".local/state/python/history",
     ".node_repl_history",
     ".sqlite_history",
     ".mysql_history",
@@ -38,7 +51,10 @@ SHELL_TARGET_FILES: List[str] = [
     ".dbshell",
     ".rediscli_history",
     ".mongorc.js",
-    # Düzenleyiciler ve Pager Araçları
+    # Hata Ayıklayıcılar ve Tersine Mühendislik
+    ".gdb_history",
+    ".radare2_history",
+    # Düzenleyiciler ve Ağ İstemcileri
     ".lesshst",
     ".viminfo",
     ".local/state/nvim/shada/main.shada",
@@ -109,7 +125,7 @@ def clean_shell_history(
             logger.warning("Dosya temizlenirken hata oluştu (%s): %s", full_path, err)
             failed_files.append({"file": full_path, "error": str(err)})
 
-    # Çalışan shell oturumları için ortam tavsiyesi
+    # Çalışan kabuk oturumları için ortam tavsiyesi
     env_recommendations = {
         "HISTFILE": "/dev/null",
         "HISTSIZE": "0",

@@ -3,6 +3,7 @@
 Bu modül; sistemde yüklü olan paket yöneticilerini (APT, Pacman, DNF, Zypper) otomatik
 tespit ederek indirme önbelleklerini ve gereksiz paketleri temizler; ayrıca Flatpak
 ve Snap sandbox ortamlarının kullanıcı dizininde bıraktığı önbellekleri süpürür.
+Root yetkisiyle yeniden oluşturulan dizinlerin sahipliğini (chown) kullanıcıya devreder.
 """
 
 from __future__ import annotations
@@ -22,6 +23,16 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 from core.forensics.lowlevel import sync_disks
 
 logger = logging.getLogger("AnonVoidPkgMgr")
+
+
+def _fix_ownership(path: str, home_dir: str) -> None:
+    """Oluşturulan dosya veya dizin sahipliğini hedef ev dizini sahibine (uid:gid) eşitler."""
+    if hasattr(os, "chown") and hasattr(os, "stat"):
+        try:
+            st = os.stat(home_dir)
+            os.chown(path, st.st_uid, st.st_gid)
+        except Exception as err:
+            logger.debug("Sahiplik düzeltilemedi (%s): %s", path, err)
 
 
 def detect_package_managers() -> List[str]:
@@ -56,7 +67,7 @@ def clean_package_manager_caches() -> Dict[str, Any]:
         "errors": [],
     }
 
-    # 1. APT Temizliği
+    # 1. APT Temizliği (Debian / Ubuntu / Kali)
     if "apt" in managers:
         try:
             cmd1 = ["apt-get", "clean"]
@@ -78,7 +89,7 @@ def clean_package_manager_caches() -> Dict[str, Any]:
         except Exception as err:
             results["errors"].append(f"Pacman önbellek temizleme hatası: {err}")
 
-    # 3. DNF Temizliği (Fedora)
+    # 3. DNF Temizliği (Fedora / RHEL)
     if "dnf" in managers:
         try:
             cmd = ["dnf", "clean", "all"]
@@ -104,6 +115,7 @@ def clean_sandbox_artifacts(target_home: Optional[str] = None) -> Dict[str, Any]
     """Flatpak (~/.var/app/) ve Snap (~/snap/) sandbox önbellek dizinlerini temizler.
 
     Kullanıcı ayarlarını ve verilerini korur; yalnızca geçici 'cache' ve 'Cache' dizinlerini siler.
+    Root daemon çalıştığında yeniden açılan dizinlerin sahipliğini (chown) kullanıcıya aktarır.
 
     Returns:
         Dict[str, Any]: Temizlik istatistikleri.
@@ -112,7 +124,7 @@ def clean_sandbox_artifacts(target_home: Optional[str] = None) -> Dict[str, Any]
     cleared_dirs: List[str] = []
     errors: List[str] = []
 
-    logger.info("Sandbox (Flatpak/Snap) önbellekleri taranıyor...")
+    logger.info("Sandbox (Flatpak/Snap) önbellekleri taranıyor: %s", home)
 
     # 1. Flatpak Önbellekleri: ~/.var/app/<app_id>/cache/*
     flatpak_base = os.path.join(home, ".var", "app")
@@ -123,6 +135,7 @@ def clean_sandbox_artifacts(target_home: Optional[str] = None) -> Dict[str, Any]
                     try:
                         shutil.rmtree(cache_dir, ignore_errors=True)
                         os.makedirs(cache_dir, mode=0o700, exist_ok=True)
+                        _fix_ownership(cache_dir, home)
                         cleared_dirs.append(cache_dir)
                     except Exception as err:
                         errors.append(f"Flatpak önbelleği silinemedi ({cache_dir}): {err}")
@@ -136,6 +149,7 @@ def clean_sandbox_artifacts(target_home: Optional[str] = None) -> Dict[str, Any]
                     try:
                         shutil.rmtree(cache_dir, ignore_errors=True)
                         os.makedirs(cache_dir, mode=0o700, exist_ok=True)
+                        _fix_ownership(cache_dir, home)
                         cleared_dirs.append(cache_dir)
                     except Exception as err:
                         errors.append(f"Snap önbelleği silinemedi ({cache_dir}): {err}")
