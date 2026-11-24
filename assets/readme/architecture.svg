@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="460" viewBox="0 0 1200 460"
+     role="img" aria-labelledby="arch-title arch-desc">
+  <title id="arch-title">AnonVoid Privilege-Separated System Architecture</title>
+  <desc id="arch-desc">Two-tier architecture separating unprivileged PyQt6 GUI and CLI from the root daemon across a SO_PEERCRED Unix domain socket boundary.</desc>
+
+  <!-- Background -->
+  <rect width="1200" height="460" rx="20" fill="#090b0f" />
+  <rect x="1" y="1" width="1198" height="458" rx="19" fill="none" stroke="#212833" stroke-width="2" />
+
+  <!-- Tier 1: User Space -->
+  <g transform="translate(48 32)">
+    <rect x="0" y="0" width="1104" height="116" rx="14" fill="#11151b" stroke="#212833" stroke-width="1.5" />
+    <text x="24" y="30"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="18" font-weight="700" fill="#4f97ff">
+      USER SPACE (Unprivileged UID — Root GUI Blocked)
+    </text>
+
+    <rect x="24" y="48" width="310" height="48" rx="8" fill="#161b23" stroke="#2f3945" stroke-width="1.5" />
+    <text x="179" y="79" text-anchor="middle"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="20" font-weight="600" fill="#eef2f7">PyQt6 Desktop GUI</text>
+
+    <rect x="358" y="48" width="310" height="48" rx="8" fill="#161b23" stroke="#2f3945" stroke-width="1.5" />
+    <text x="513" y="79" text-anchor="middle"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="20" font-weight="600" fill="#eef2f7">CLI (--wipe, --exec, --panic)</text>
+
+    <rect x="692" y="48" width="388" height="48" rx="8" fill="#161b23" stroke="#4f97ff" stroke-width="1.5" />
+    <text x="886" y="79" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="19" font-weight="600" fill="#eef2f7">Async IPC (daemon_client.py)</text>
+  </g>
+
+  <!-- Connector & Privilege Boundary -->
+  <line x1="600" y1="148" x2="600" y2="176" stroke="#35d18b" stroke-width="2.5" />
+  <g transform="translate(148 176)">
+    <rect x="0" y="0" width="904" height="58" rx="10" fill="#0d1b15" stroke="#35d18b" stroke-width="1.5" />
+    <text x="452" y="26" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="19" font-weight="700" fill="#35d18b">
+      IPC BOUNDARY: /run/anonvoid/daemon.sock (0660 root:anonvoid)
+    </text>
+    <text x="452" y="48" text-anchor="middle"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="18" fill="#aab5c3">
+      Kernel SO_PEERCRED UID/GID verification + strict JSON action whitelist
+    </text>
+  </g>
+  <line x1="600" y1="234" x2="600" y2="262" stroke="#35d18b" stroke-width="2.5" />
+
+  <!-- Tier 2: Privileged Core -->
+  <g transform="translate(48 262)">
+    <rect x="0" y="0" width="1104" height="166" rx="14" fill="#11151b" stroke="#212833" stroke-width="1.5" />
+    <text x="24" y="30"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="18" font-weight="700" fill="#ff5f6d">
+      PRIVILEGED CORE (Root Daemon — core/daemon.py)
+    </text>
+
+    <!-- Left Module: Forensics Core -->
+    <rect x="24" y="46" width="516" height="100" rx="10" fill="#161b23" stroke="#2f3945" stroke-width="1.5" />
+    <text x="44" y="76"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="20" font-weight="700" fill="#eef2f7">core/forensics/</text>
+    <text x="44" y="106"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="18" fill="#aab5c3">lowlevel (memset/mlock) • metadata (EXIF/PNG strip)</text>
+    <text x="44" y="132"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="18" fill="#aab5c3">shell shred • journal vacuum • memory &amp; fstrim</text>
+
+    <!-- Right Module: Network Stack -->
+    <rect x="564" y="46" width="516" height="100" rx="10" fill="#161b23" stroke="#2f3945" stroke-width="1.5" />
+    <text x="584" y="76"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="20" font-weight="700" fill="#eef2f7">core/network/ &amp; sandbox</text>
+    <text x="584" y="106"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="18" fill="#aab5c3">nftables firewall • Tor bridges &amp; Five Eyes filter</text>
+    <text x="584" y="132"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="18" fill="#aab5c3">netns Tor capsule • dnscrypt • MAC spoof • panic nuke</text>
+  </g>
+</svg>

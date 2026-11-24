@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">AnonVoid — Zero Self-Footprint Anti-Forensics &amp; Network Shield</title>
+  <desc id="hero-desc">AnonVoid header showing project identity, privilege-separated architecture summary, and zero self-footprint Tor and forensic erasure status.</desc>
+
+  <defs>
+    <linearGradient id="shieldStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f97ff" />
+      <stop offset="100%" stop-color="#35d18b" />
+    </linearGradient>
+    <linearGradient id="bgGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1420" />
+      <stop offset="100%" stop-color="#090b0f" />
+    </linearGradient>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="1200" height="360" rx="22" fill="url(#bgGlow)" />
+  <rect x="1" y="1" width="1198" height="358" rx="21" fill="none" stroke="#212833" stroke-width="2" />
+
+  <!-- Subtle Structural Grid Accent -->
+  <line x1="650" y1="36" x2="650" y2="324" stroke="#212833" stroke-width="1.5" />
+
+  <!-- Left Column: Identity & Value -->
+  <g id="title-block" transform="translate(56 48)">
+    <!-- Shield Emblem -->
+    <g transform="translate(0 0) scale(0.11)">
+      <path d="M 256,32 C 340,96 440,88 440,88 C 440,300 320,440 256,480 C 192,440 72,300 72,88 C 72,88 172,96 256,32 Z"
+            fill="#11151b" stroke="url(#shieldStroke)" stroke-width="22" stroke-linejoin="round" />
+      <rect x="216" y="205" width="80" height="80" rx="14" fill="#35d18b" />
+      <circle cx="256" cy="238" r="10" fill="#090b0f" />
+      <path d="M 256,248 L 256,266" stroke="#090b0f" stroke-width="8" stroke-linecap="round" />
+    </g>
+
+    <text x="68" y="34"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="18" font-weight="600" letter-spacing="1.5" fill="#35d18b">
+      LINUX ANTI-FORENSICS &amp; NETWORK SHIELD
+    </text>
+
+    <text x="0" y="114"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="56" font-weight="800" letter-spacing="-1" fill="#eef2f7">
+      AnonVoid
+    </text>
+
+    <text x="2" y="162"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="22" font-weight="400" fill="#aab5c3">
+      Zero self-footprint forensic erasure and kernel-level
+    </text>
+    <text x="2" y="192"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+          font-size="22" font-weight="400" fill="#aab5c3">
+      Tor routing behind a strict privilege boundary.
+    </text>
+
+    <!-- Compact Metadata Pills -->
+    <g transform="translate(0 226)">
+      <rect x="0" y="0" width="136" height="36" rx="8" fill="#11151b" stroke="#212833" stroke-width="1.5" />
+      <text x="68" y="24" text-anchor="middle"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="17" font-weight="600" fill="#eef2f7">Python 3.10+</text>
+
+      <rect x="150" y="0" width="166" height="36" rx="8" fill="#11151b" stroke="#212833" stroke-width="1.5" />
+      <text x="233" y="24" text-anchor="middle"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="17" font-weight="600" fill="#4f97ff">SO_PEERCRED IPC</text>
+
+      <rect x="330" y="0" width="154" height="36" rx="8" fill="#11151b" stroke="#212833" stroke-width="1.5" />
+      <text x="407" y="24" text-anchor="middle"
+            font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+            font-size="17" font-weight="600" fill="#35d18b">nftables + Tor</text>
+    </g>
+  </g>
+
+  <!-- Right Column: Project-Native Terminal / Boundary Specimen -->
+  <g id="project-proof" transform="translate(684 44)">
+    <rect x="0" y="0" width="464" height="272" rx="14" fill="#11151b" stroke="#2f3945" stroke-width="1.5" />
+
+    <!-- Terminal Title Bar -->
+    <rect x="0" y="0" width="464" height="40" rx="14" fill="#161b23" />
+    <rect x="0" y="26" width="464" height="14" fill="#161b23" />
+    <line x1="0" y1="40" x2="464" y2="40" stroke="#212833" stroke-width="1.5" />
+
+    <circle cx="22" cy="20" r="6" fill="#ff5f6d" />
+    <circle cx="42" cy="20" r="6" fill="#f3b64a" />
+    <circle cx="62" cy="20" r="6" fill="#35d18b" />
+
+    <text x="232" y="25" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="16" font-weight="600" fill="#7d8998">
+      /run/anonvoid/daemon.sock
+    </text>
+
+    <!-- Terminal Output Lines -->
+    <g transform="translate(22 72)"
+       font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+       font-size="18">
+      <text x="0" y="0" fill="#35d18b" font-weight="700">$ anonvoid --scan-exposure</text>
+
+      <text x="0" y="38" fill="#7d8998">BOUNDARY</text>
+      <text x="116" y="38" fill="#eef2f7">UID 1000 -&gt; Root Daemon</text>
+
+      <text x="0" y="72" fill="#7d8998">BYTECODE</text>
+      <text x="116" y="72" fill="#35d18b">0 .pyc / mlock + bzero</text>
+
+      <text x="0" y="106" fill="#7d8998">FIREWALL</text>
+      <text x="116" y="106" fill="#4f97ff">nftables :9040 / DNS :5300</text>
+
+      <text x="0" y="140" fill="#7d8998">CAPSULE</text>
+      <text x="116" y="140" fill="#eef2f7">--exec &lt;cmd&gt; | --wipe</text>
+
+      <!-- Bottom Status Rule -->
+      <line x1="0" y1="162" x2="420" y2="162" stroke="#212833" stroke-width="1.5" />
+      <circle cx="8" cy="182" r="5" fill="#35d18b" />
+      <text x="22" y="188" fill="#35d18b" font-weight="600">ZERO SELF-FOOTPRINT VERIFIED</text>
+    </g>
+  </g>
+</svg>

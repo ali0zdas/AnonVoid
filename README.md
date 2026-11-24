@@ -1,253 +1,180 @@
-<div align="center">
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="AnonVoid — Zero Self-Footprint Anti-Forensics Engine and Transparent Network Shield for Linux" />
+</p>
 
-  <img src="packaging/desktop/anonvoid.svg" width="130" height="130" alt="AnonVoid Logo" />
+<p align="center">
+  <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Version-1.0.0-35d18b?style=for-the-badge" alt="Version 1.0.0" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-4f97ff?style=for-the-badge" alt="License: GPLv3" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" /></a>
+  <a href="https://www.kali.org/"><img src="https://img.shields.io/badge/Linux-Kali%20%7C%20Debian%20%7C%20Arch%20%7C%20Fedora-557C94?style=for-the-badge&logo=linux&logoColor=white" alt="Supported Distributions" /></a>
+  <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Security-Zero_Self--Footprint-00d4ff?style=for-the-badge" alt="Zero Self-Footprint" /></a>
+</p>
 
-  # AnonVoid (`anonvoid`)
-  ### Dijital Adli Bilişim (Anti-Forensics) İz Temizleyicisi ve Saydam Ağ Gizlilik Kalkanı
-  *Zero Self-Footprint Anti-Forensics Engine & Transparent Network Shield for Linux*
-
-  <p align="center">
-    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Version-1.0.0-00ff88?style=for-the-badge&logo=shield" alt="Version" /></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge" alt="License: GPL v3" /></a>
-    <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" /></a>
-    <a href="https://www.kali.org/"><img src="https://img.shields.io/badge/Distro-Kali%20%7C%20Debian%20%7C%20Arch%20%7C%20Fedora-557C94?style=for-the-badge&logo=linux&logoColor=white" alt="Distributions" /></a>
-    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Security-Zero_Self--Footprint-00d4ff?style=for-the-badge" alt="Zero Self-Footprint" /></a>
-    <a href="https://github.com/ali0zdas/AnonVoid"><img src="https://img.shields.io/badge/Tests-128%2F128_Passing-brightgreen?style=for-the-badge" alt="Tests Passing" /></a>
-  </p>
-
-  <p align="center">
-    <b>Sıfır İz. Çift Katmanlı Ayrıcalık Ayrımı. Tavizsiz Dijital Adli Temizlik ve Ağ Kalkanı.</b>
-  </p>
-
-</div>
+<p align="center">
+  <b>Zero Self-Footprint. Kernel-Verified Privilege Separation. Uncompromising Digital Forensics Erasure &amp; Tor Shield.</b>
+</p>
 
 ---
 
-## 📌 İçindekiler
-- [Genel Bakış](#-genel-bakış)
-- [Temel Güvenlik Sütunları](#-temel-güvenlik-sütunları)
-- [Öne Çıkan Yetenekler](#-öne-çıkan-yetenekler)
-  - [1. Adli İz ve Sistem Temizlik Motoru](#1-adli-iz-ve-sistem-temizlik-motoru-forensics-core)
-  - [2. Ağ ve Gizlilik Omurgası](#2-ağ-ve-gizlilik-omurgası-network-stack)
-  - [3. Taktiksel Acil Durum / Panik Protokolü](#3-taktiksel-acil-durum--panik-protokolü-nuke)
-- [Sistem Mimarisi](#-sistem-mimarisi)
-- [Modern Görsel Arayüz (PyQt6) & Temalar](#-modern-görsel-arayüz-pyqt6--temalar)
-- [Kurulum ve Hızlı Başlangıç](#-kurulum-ve-hızlı-başlangıç)
-- [Kullanım ve Komut Satırı Seçenekleri](#-kullanım-ve-komut-satırı-seçenekleri)
-- [Birim Testler ve Doğrulama](#-birim-testler-ve-doğrulama)
-- [Güvenlik ve Tehdit Modeli](#-güvenlik-ve-tehdit-modeli)
-- [Lisans ve İletişim](#-lisans-ve-iletişim)
+## Overview
+
+**AnonVoid** (`anonvoid`) is an open-source anti-forensics cleaner and transparent network privacy shield built for Linux security workflows (Kali Linux, Debian, Ubuntu, Arch Linux, and Fedora). It removes digital traces across shell histories, system logs, desktop artifacts, metadata, RAM, and storage—while transparently routing outbound traffic through Tor and DNSCrypt at the kernel firewall level (`nftables` / `iptables`).
+
+Unlike conventional cleanup scripts, AnonVoid is engineered around two strict invariants: **Zero Self-Footprint** (never writing bytecode caches or temp artifacts to disk) and a **Privilege Boundary** that isolates the unprivileged desktop GUI/CLI from the root daemon.
 
 ---
 
-## 🛡️ Genel Bakış
+## Core Security Pillars
 
-**AnonVoid**, Linux ortamlarında (başta Kali Linux, Debian, Ubuntu, Arch Linux ve Fedora olmak üzere) kullanıcıların ve güvenlik uzmanlarının arkalarında bırakabileceği tüm dijital ayak izlerini (footprint/fingerprint) adli bilişim standartlarında ortadan kaldıran; aynı zamanda sistemin tüm giden ağ trafiğini çekirdek seviyesinde (`nftables`) Tor ve DNSCrypt üzerinden şeffaf tünelleyerek tam anonimlik sağlayan açık kaynaklı, yüksek güvenlikli bir anti-forensics platformudur.
-
-Geleneksel temizlik araçlarının aksine AnonVoid, **kendisinin sistemde adli iz bırakmasını engelleyen (Zero Self-Footprint)** ve masaüstü arayüzü ile root çekirdeğini birbirinden yalıtan **Ayrıcalık Ayrımı (Privilege Boundary)** mimarisine sahiptir.
-
----
-
-## ⚡ Temel Güvenlik Sütunları
-
-| Prensip | Uygulama ve Teknik Standart |
+| Principle | Implementation & Technical Standard |
 | :--- | :--- |
-| **Sıfır Kendi İzi (Zero Self-Footprint)** | Diske asla `.pyc` veya `__pycache__` yazılmaz (`sys.dont_write_bytecode = True`, `PYTHONDONTWRITEBYTECODE=1`). Hassas bellek bölgeleri `libc.memset` / `explicit_bzero` ile anında sıfırlanır, `mlock` ile Linux swap alanına yazılması engellenir. |
-| **Ayrıcalık Ayrımı (Privilege Separation)** | Grafik kullanıcı arayüzü (PyQt6) Wayland ve çekirdek güvenliği gereğince **ASLA root veya sudo ile çalıştırılamaz** (`os.getuid() == 0` engeli). Sistemik işlemler `/run/anonvoid/daemon.sock` üzerinden root daemon ile yürütülür. |
-| **Kernel Doğrulamalı IPC (SO_PEERCRED)** | Daemon, bağlanan istemcinin kimliğini kullanıcının beyanına göre değil, Linux çekirdeğinden `SO_PEERCRED` ile doğrudan okur. Yalnızca yetkili kullanıcılar ve beyaz listedeki komutlar işleme alınır. |
-| **Katı Şema & `O_NOFOLLOW` Güvencesi** | Dosya açılışlarında sembolik bağ saldırılarını (symlink race condition) önlemek için `os.O_NOFOLLOW` bayrağı kullanılır. Port ve UID doğrulamaları katı aralık kontrolünden geçirilir. |
-| **Adli Anomali Önleme** | Sistem logları körü körüne 0 bayt yapılmaz; `journalctl --vacuum-time=1s` ve `logrotate -f` simülasyonu ile olağan sistem davranışı görünümü korunur. |
+| **Zero Self-Footprint** | Python bytecode emission is disabled (`sys.dont_write_bytecode = True`, `PYTHONDONTWRITEBYTECODE=1`). Sensitive memory regions are wiped with `libc.memset` / `explicit_bzero` and locked against swap via `mlock`. |
+| **Privilege Separation** | The PyQt6 GUI **never runs as root or sudo** (`os.getuid() == 0` is blocked) to protect Wayland/X11 sessions. Privileged actions are executed exclusively by the root daemon over `/run/anonvoid/daemon.sock`. |
+| **Kernel-Verified IPC (`SO_PEERCRED`)** | The daemon reads the caller's real UID/GID directly from the Linux kernel via `SO_PEERCRED` rather than trusting client claims. Only authorized users and whitelisted JSON actions are accepted. |
+| **Strict Schema & `O_NOFOLLOW`** | File operations open targets with `os.O_NOFOLLOW` to block symlink race attacks. Ports and UIDs undergo strict range and ASCII decimal validation. |
+| **Anti-Anomaly Log Hygiene** | System logs are never blindly truncated to 0 bytes; `journalctl --vacuum-time=1s` and `logrotate -f` preserve normal system appearance. |
 
 ---
 
-## 🚀 Öne Çıkan Yetenekler
+## System Architecture
 
-### 1. Adli İz ve Sistem Temizlik Motoru (Forensics Core)
-* **Shell & Terminal Geçmişi Hijyeni:** `bash`, `zsh`, `fish`, `python`, `mysql`, `psql` ve `node` geçmiş dosyaları rastgele baytlar (`/dev/urandom`) ve sıfır (`0x00`) ile çok aşamalı ezilerek (`shred`) diskten silinir.
-* **Gelişmiş Meta Veri ve EXIF İmhası:** Harici bağımlılık olmadan saf Python ile PNG (`tEXt`, `zTXt`, `iTXt`, `eXIf`, `tIME`) ve JPEG (`APP1/EXIF`, `APP13/IPTC`, `COM`) bloklarını güvenle temizler; sembolik bağları (`O_NOFOLLOW`) reddeder.
-* **Canlı Adli Maruziyet Radarı (Forensic Exposure Radar):** Salt-okunur modda geçmiş satırlarını, thumbnail ve önbellek boyutlarını analiz ederek 0-100 arası anlık risk puanı ve seviyesi (`DÜŞÜK`, `ORTA`, `YÜKSEK`, `KRİTİK`) üretir.
-* **Sistem Günlükleri:** `systemd-journald` logları vakumlanır, `/var/log/*` rotasyon kalıntıları temizlenir, `wtmp`, `btmp` ve `lastlog` oturum kayıtları hijyenik hale getirilir.
-* **Masaüstü Artefaktları & Önbellekler:** XDG küçük resimleri (`thumbnails`), son kullanılan dosyalar (`recently-used.xbel`), Çöp Kutusu (`Trash`), Chromium ve Firefox disk önbellekleri temizlenir.
-* **RAM ve Bellek Hijyeni:** `drop_caches` ile Linux sayfa önbellekleri (pagecache, dentries, inodes) boşaltılır; `compact_memory` çalıştırılır; takas alanı (`swapoff`) sıfırlanarak yeniden devreye alınır; `prctl(PR_SET_DUMPABLE, 0)` ile ptrace ve bellek dökümü engellenir.
-* **Depolama & SSD/NVMe Blok Yönetimi:** SSD donanım tespiti (`/sys/block`), FTL aşınma dengelemesini aşmak üzere `fstrim -av` tetiklemesi ve dosya sistemi boş alan sıfırlama (free-space zeroing).
-* **Paket Yöneticisi & Sandbox:** APT, Pacman, DNF, Zypper paket kalıntıları ile Flatpak ve Snap sandbox artıklarının temizlenmesi.
+AnonVoid enforces a two-tier boundary between the unprivileged user interface and the privileged system core:
 
-### 2. Ağ ve Gizlilik Omurgası (Network Stack)
-* **nftables / iptables Çekirdek Duvarı:** Tüm giden TCP trafiği Tor `TransPort` (9040), tüm giden DNS trafiği Tor `DNSPort` (5300) yönlendirmesine tabi tutulur; DNS yönlendirmesi yerel LAN istisnasından önce işletilir.
-* **UDP & ICMP Kaçış Koruması:** WebRTC STUN ve QUIC kaynaklı veri sızıntılarını önlemek için çıkış zincirinde tüm UDP ve ICMP paketleri (`drop`) engellenir.
-* **Uygulama Bazlı Tor Kapsülü (NetNS Sandbox & Torsocks):** Tüm sistemi Tor'a yönlendirmeden tek bir komutu veya uygulamayı izole Tor ağ kafesinde çalıştırır (`anonvoid --exec <komut>`); root yetkilerini hedef UID'ye düşürür.
-* **Tor Köprüleri & Five Eyes Muafiyeti:** `obfs4` ve `snowflake` pluggable transports köprüleri ile sansür aşımı; Five Eyes (`{us},{gb},{ca},{au},{nz}`) gözetim ittifakı çıkış düğümlerini hariç tutma seçeneği.
-* **DoH / DoT Sızıntı Kalkanı:** 1.1.1.1, 8.8.8.8, 9.9.9.9 gibi genel DoH sağlayıcılarının 443 portu çekirdek seviyesinde `DROP` edilir.
-* **IPv6 Koruması:** IPv6 üzerinden oluşabilecek kimlik ve coğrafi sızıntılar `ip6 table` üzerinden tüm giden trafiğin bloklanmasıyla engellenir.
-* **Döngü (Routing Loop) Engeli:** `meta skuid debian-tor -> accept` kuralı ile Tor servisinin kendi trafiği muaf tutulur.
-* **.onion Sanal IP Alanı:** `10.192.0.0/10` bloğu yerel ağ muafiyetinden ayrı tutularak doğrudan Tor tüneline yönlendirilir.
-* **In-Place MAC Sahteleme:** NetworkManager ile yarış durumuna girmeden ağ bağdaştırıcısının MAC adresi yerinde sahtelenir.
-* **Canlı Sızıntı Testi:** IP adresi, ISP, WebRTC, DNS ve Tor çıkış düğümü tek tuşla taranıp puanlanır.
-
-### 3. Taktiksel Acil Durum & Donanımsal Kill-Switch (Nuke & Dead Man's Switch)
-Tehlike anında arayüzdeki acil durum butonuna basıldığında, CLI üzerinden `--panic` tetiklendiğinde veya yetkili USB güvenlik anahtarı fiziksel olarak çekildiğinde (`core/usb_guard.py`):
-1. nftables/iptables kuralları anında tüm dış ağ trafiğini dondurur (`DROP all`).
-2. Aktif terminal oturumu ve shell geçmişi sıfırlanır.
-3. Linux RAM önbellekleri serbest bırakılır.
-4. Tercihe bağlı olarak sistem güvenli şekilde anında kapatılır (Panic Shutdown).
+<p align="center">
+  <img src="./assets/readme/architecture.svg" width="100%" alt="AnonVoid two-tier privilege-separated architecture across SO_PEERCRED Unix domain socket" />
+</p>
 
 ---
 
-## 🏗️ Sistem Mimarisi
+## Capabilities
 
-AnonVoid, ayrıcalıksız kullanıcı arayüzü ile sistem yetkilerine sahip arka plan servisini birbirinden ayıran çift katmanlı bir mimari kullanır:
+### 1. Forensics Core (`core/forensics/`)
+* **Shell & REPL History Shredding:** Multi-pass overwrite (`/dev/urandom` and `0x00`) for `bash`, `zsh`, `fish`, `python`, `mysql`, `psql`, and `node` histories.
+* **Dependency-Free Metadata Stripping:** Pure-Python atomic sanitization of PNG (`tEXt`, `zTXt`, `iTXt`, `eXIf`, `tIME`) and JPEG (`APP1/EXIF`, `APP13/IPTC`, `COM`) chunks, rejecting symlinks via `O_NOFOLLOW`.
+* **Live Forensic Exposure Radar:** Read-only scanner evaluating shell histories, thumbnails, and caches to compute a `0–100` risk score (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+* **System & Session Logs:** Vacuums `systemd-journald`, rotates `/var/log/*` remnants, and sanitizes `wtmp`, `btmp`, and `lastlog`.
+* **Desktop & Browser Caches:** Clears XDG `thumbnails`, `recently-used.xbel`, `Trash`, and Chromium/Firefox disk caches.
+* **RAM & Swap Hygiene:** Flushes Linux pagecache/dentries/inodes (`drop_caches`), compacts memory, cycles `swapoff` to wipe swap, and sets `prctl(PR_SET_DUMPABLE, 0)` against `ptrace`/core dumps.
+* **Storage & SSD/NVMe Blocks:** Detects SSD hardware (`/sys/block`), triggers `fstrim -av` for FTL wear-leveling mitigation, and supports free-space zeroing.
+* **Package Managers & Sandboxes:** Cleans APT, Pacman, DNF, Zypper caches alongside Flatpak and Snap remnants.
 
-```
-+--------------------------------------------------------------------------+
-|                       KULLANICI ALANI (Kullanıcı UID)                    |
-|                                                                          |
-|   [ PyQt6 Modern Arayüz ]        veya        [ CLI / Taktiksel Wipe ]     |
-|             \                                    /                       |
-|              \                                  /                        |
-|               v                                v                         |
-|     +----------------------------------------------------+               |
-|     |  Asenkron IPC İstemcisi (core/daemon_client.py)   |               |
-|     +----------------------------------------------------+               |
-+-----------------------------------|--------------------------------------+
-                                    |
-                  Unix Domain Socket: /run/anonvoid/daemon.sock
-                  İzinler: 0660 root:anonvoid
-                  Doğrulama: SO_PEERCRED (Kernel UID/GID Denetimi)
-                                    |
-+-----------------------------------|--------------------------------------+
-|                     AYRICALIKLI ÇEKİRDEK (Root Daemon)                    |
-|                                                                          |
-|     +----------------------------------------------------+               |
-|     |         AnonVoid Root Daemon (core/daemon.py)      |               |
-|     |     (Katı Komut Beyaz Listesi & Şema Denetimi)     |               |
-|     +----------------------------------------------------+               |
-|            |                                      |                      |
-|            v                                      v                      |
-|  [ core/forensics/ ]                     [ core/network/ & core/ ]       |
-|  - lowlevel (libc memset/mlock)          - firewall (nftables/iptables)  |
-|  - metadata (PNG/JPEG EXIF strip)        - tor (Bridges/Five Eyes)       |
-|  - manager (Exposure Radar)              - netns_sandbox (Tor Capsule)   |
-|  - shell (urandom shred)                 - usb_guard (Dead Man's Switch) |
-|  - logs (journal vacuum/logrotate)       - dnscrypt (DNSCrypt-proxy)     |
-|  - memory (drop_caches/swapoff)          - mac (In-place OUI spoofing)   |
-|  - storage (fstrim/zero_free_space)      - panic (Emergency Nuke)        |
-+--------------------------------------------------------------------------+
-```
+### 2. Network & Privacy Stack (`core/network/`)
+* **Kernel Firewall (`nftables` / `iptables`):** Redirects outbound TCP to Tor `TransPort` (`9040`) and DNS to Tor `DNSPort` (`5300`), enforcing DNS redirection ahead of local LAN exceptions.
+* **UDP & ICMP Leak Prevention:** Drops outbound UDP and ICMP packets in the egress chain to eliminate WebRTC STUN and QUIC leaks.
+* **Per-App Tor Capsule (`NetNS` & `Torsocks`):** Runs a single command in an isolated Tor network namespace (`anonvoid --exec <cmd>`) without routing the entire host, dropping privileges back to the target UID.
+* **Tor Bridges & Five Eyes Exclusion:** Supports `obfs4` and `snowflake` pluggable transports, plus optional exclusion of Five Eyes exit nodes (`{us},{gb},{ca},{au},{nz}`).
+* **DoH / DoT & IPv6 Shield:** Drops port `443` traffic to public DoH resolvers (`1.1.1.1`, `8.8.8.8`, `9.9.9.9`) and blocks all outbound `ip6` traffic.
+* **Loop Prevention & `.onion` Routing:** Exempts `debian-tor` via `meta skuid` and routes `10.192.0.0/10` directly into the Tor tunnel.
+* **In-Place MAC Spoofing & Leak Test:** Spoofs interface MAC addresses without racing NetworkManager, and provides one-click IP, ISP, DNS, WebRTC, and Tor exit verification.
+
+### 3. Tactical Emergency & Hardware Kill-Switch
+Triggered from the GUI panic button, CLI `--panic`, or physical removal of an authorized USB security key (`core/usb_guard.py`):
+1. Immediately locks down all outbound traffic via firewall (`DROP all`).
+2. Wipes active terminal sessions and shell histories.
+3. Flushes Linux RAM caches.
+4. Optionally executes an immediate panic shutdown.
 
 ---
 
-## 🎨 Modern Görsel Arayüz (PyQt6) & Temalar
+## PyQt6 Desktop Interface & Themes
 
-AnonVoid, karanlık mod ve siber güvenlik estetiğine odaklanmış **5 Dinamik Görsel Tema** ile donatılmıştır:
+AnonVoid includes a PyQt6 desktop interface with **5 dynamic themes** tuned for low-glare and high-visibility environments:
 
-* **OLED:** Saf siyah (`#000000`) zemin ve yüksek kontrastlı minimalist siberpunk çizgileri.
-* **Circuit:** Matriks yeşili (`#00ff88`) ve koyu zümrüt detaylar.
-* **Binary:** Siber mavi (`#00d4ff`) ve derin lacivert tonlar.
-* **Pixel:** Retro 8-bit / siberpunk mor ve neon vurgular.
-* **Light:** Yüksek aydınlatmalı ortamlarda çalışmak için temiz gri/beyaz düzeni.
+* **OLED:** Deep dark slate (`#090b0f`) with crisp high-contrast accents.
+* **Circuit:** Deep PCB emerald (`#070c0a`) with `#34d399` highlights.
+* **Binary:** Cyber blue (`#00d4ff`) over deep navy surfaces.
+* **Pixel:** Retro neon purple and crisp pixel-inspired accents.
+* **Light:** Clean high-visibility light palette for bright environments.
 
 ---
 
-## 📦 Kurulum ve Hızlı Başlangıç
+## Quick Start & Installation
 
-### Sistem Gereksinimleri
-* **İşletim Sistemi:** Kali Linux, Debian 11+, Ubuntu 20.04+, Arch Linux, Fedora 36+
-* **Python Sürümü:** Python 3.10 veya üzeri
-* **Gerekli Paketler:** `tor`, `nftables` (veya `iptables`), `systemd`
+### Requirements
+* **OS:** Kali Linux, Debian 11+, Ubuntu 20.04+, Arch Linux, Fedora 36+
+* **Python:** 3.10+
+* **System Packages:** `tor`, `nftables` (or `iptables`), `systemd`
 
-### Tek Adımda Evrensel Kurulum
-
-Depoyu klonlayın ve dağıtımınıza uygun şekilde servis, grup ve ikili dosyaları yapılandıran evrensel kurulum betiğini çalıştırın:
+### Universal Installer
 
 ```bash
-# Depoyu klonlayın
 git clone https://github.com/ali0zdas/AnonVoid.git
 cd AnonVoid
-
-# Kurulumu root yetkisiyle başlatın
 sudo bash install.sh
 ```
 
-Kurulum betiği otomatik olarak:
-1. `anonvoid` sistem grubunu oluşturur ve mevcut kullanıcınızı bu gruba ekler.
-2. Bağımlılıkları kontrol eder (`tor`, `nftables`, `python3-pyqt6` vb.).
-3. `anonvoid.service` systemd arka plan servisini kurar ve başlatır.
-4. `/usr/local/bin/anonvoid` kısayolunu ve masaüstü uygulamasını (`.desktop`) sisteme kaydeder.
+The installer automatically:
+1. Creates the `anonvoid` system group and adds your user.
+2. Checks required dependencies (`tor`, `nftables`, `python3-pyqt6`, etc.).
+3. Installs and starts the `anonvoid.service` systemd daemon.
+4. Registers `/usr/local/bin/anonvoid` and the desktop entry (`.desktop`).
 
-> **Not:** Grubun geçerli olması için oturumu kapatıp açabilir veya `newgrp anonvoid` komutunu kullanabilirsiniz.
+> **Note:** Log out and back in—or run `newgrp anonvoid`—for group membership to take effect.
 
-### Kaldırma (Uninstall)
-AnonVoid'i tüm servis, kısayol ve konfigürasyonlarıyla birlikte sistemden tamamen temizlemek için:
+### Uninstall
+
 ```bash
 sudo bash install.sh --uninstall
 ```
 
 ---
 
-## 💻 Kullanım ve Komut Satırı Seçenekleri
-
-AnonVoid hem grafik arayüz (GUI) hem de uçbirim üzerinden çalışan doğrudan CLI modlarını destekler:
+## CLI Usage
 
 ```bash
-# 1. Grafik Kullanıcı Arayüzünü Başlatma (Ayrıcalıksız kullanıcı olarak)
+# Launch the PyQt6 Desktop GUI (as an unprivileged user)
 anonvoid
 
-# 2. Taktiksel Temizle ve Kapan (Clean & Exit)
-# Arka planda servis bırakmadan tüm geçmişi, logları ve önbellekleri siler
+# Tactical Clean & Exit (wipes histories, logs, and caches with zero trace)
 anonvoid --wipe
 
-# 3. Tek Bir Komutu İzole Tor Kapsülünde Çalıştırma (NetNS / Torsocks)
+# Run a single command inside an isolated Tor capsule (NetNS / Torsocks)
 anonvoid --exec curl https://check.torproject.org
 
-# 4. Adli Maruziyet ve İz Analizi Taraması (Salt-okunur 0-100 Risk Skoru)
+# Read-only forensic exposure scan (0–100 risk score)
 anonvoid --scan-exposure
 
-# 5. Dosya veya Dizin Meta Verilerini (EXIF / GPS / PNG) Atomik Olarak Temizleme
-anonvoid --sanitize-meta /hedef/fotograf_veya_belge.png
+# Atomically strip metadata (EXIF / GPS / PNG chunks) from a file or directory
+anonvoid --sanitize-meta /path/to/image_or_document.png
 
-# 6. Terminal Üzerinden Ağ Kalkanını Başlatma / Kapatma
+# Toggle the transparent network shield from the terminal
 anonvoid --connect
 anonvoid --disconnect
 
-# 7. Terminal Üzerinden Canlı Sızıntı Testi
+# Run a live IP / DNS / Tor leak test
 anonvoid --leak-test
 
-# 8. Acil Durum Panik Modu (Ağı Dondur, Belleği Sıfırla)
+# Emergency Panic Mode (freeze network, flush memory)
 anonvoid --panic
 
-# 9. Root Daemon Servisini Elle Çalıştırma (Systemd dışında)
+# Run the root daemon manually (outside systemd)
 sudo anonvoid --service
 ```
 
 ---
 
-## 🧪 Birim Testler ve Doğrulama
+## Verification & Threat Model
 
-AnonVoid kod tabanı; IPC haberleşmesi, şema güvenliği, adli temizlik çağrıları, ağ duvarı kuralları, meta veri temizliği, USB kill-switch ve paketleme yapılarını kapsayan **128 adet kapsamlı birim test** ile korunmaktadır:
+Run the unit test suite (covering IPC, schema validation, forensics, firewall rules, metadata stripping, USB kill-switch, and packaging) without generating bytecode:
 
 ```bash
-# Tüm birim test paketini çalıştırma (bytecode üretmeden)
 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/ -q
 ```
 
----
-
-## 🔒 Güvenlik ve Tehdit Modeli
-
-1. **Wayland ve X11 Root Güvenliği:** GUI sürecinin asla `root` olarak çalıştırılamaması, olası Qt veya X11/Wayland bellek açıklarının ayrıcalık yükseltme (privilege escalation) için kullanılmasını imkansız kılar.
-2. **IPC Şema Koruması:** Daemon'a giden istekler katı bir JSON şemasından geçer. Keyfi kabuk komutu (shell command) veya dinamik kod çalıştırma desteği bulunmaz.
-3. **Kendi Kendini Yok Etme Hijyeni:** Taktiksel temizlik modu (`--wipe`), geride hiçbir geçici soket, PID dosyası veya log bırakmadan doğrudan işletim sistemi belleğini temizler.
+1. **Wayland / X11 Root Isolation:** Blocking root execution for the GUI prevents Qt/X11/Wayland vulnerabilities from being leveraged for privilege escalation.
+2. **Strict IPC Whitelisting:** The daemon accepts only schema-validated JSON actions—never arbitrary shell commands or dynamic code execution.
+3. **Zero-Trace Tactical Exit:** `--wipe` cleans traces directly in memory and exits without leaving temporary sockets, PID files, or logs behind.
 
 ---
 
-## ⚖️ Lisans ve İletişim
+## License & Author
 
-* **Geliştirici:** Ali Özdaş ([@ali0zdas](https://github.com/ali0zdas))
-* **Depo Adresi:** [https://github.com/ali0zdas/AnonVoid](https://github.com/ali0zdas/AnonVoid)
-* **Lisans:** Bu proje [GNU General Public License v3.0 (GPLv3)](LICENSE) kapsamında lisanslanmıştır. Açık kaynak standartlarına ve güvenlik ilkelerine tam uyumludur.
+* **Author:** Ali Özdaş ([@ali0zdas](https://github.com/ali0zdas))
+* **Repository:** [https://github.com/ali0zdas/AnonVoid](https://github.com/ali0zdas/AnonVoid)
+* **License:** [GNU General Public License v3.0 (GPLv3)](LICENSE)
 
 ---
 
-<div align="center">
-  <sub>AnonVoid — Zero-Footprint Digital Forensics Eraser & Transparent Network Privacy Shield.</sub>
-</div>
+<p align="center">
+  <sub>AnonVoid — Zero-Footprint Digital Forensics Eraser &amp; Transparent Network Privacy Shield.</sub>
+</p>
