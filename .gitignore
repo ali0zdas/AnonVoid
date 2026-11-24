@@ -90,3 +90,19 @@ desktop.ini
 # --- Yapay Zeka ve Yerel Geçici Dizinler ---
 .gemini/
 scratch/
+assets/readme/source/
+render_dashboard.py
+gui_preview*.png
+gui_dashboard*.png
+
+# --- Gizli Anahtarlar, Ortam Değişkenleri ve Geçici Yedekler ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.tmp
+*.bak
+*.orig
