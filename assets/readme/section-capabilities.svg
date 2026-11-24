@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="120" viewBox="0 0 1200 120"
+     role="img" aria-labelledby="sec3-title sec3-desc">
+  <title id="sec3-title">Capabilities</title>
+  <desc id="sec3-desc">Section header for AnonVoid forensics, network, and panic capabilities.</desc>
+  <rect width="1200" height="120" rx="16" fill="#090b0f" />
+  <rect x="1" y="1" width="1198" height="118" rx="15" fill="none" stroke="#212833" stroke-width="2" />
+  <rect x="32" y="34" width="6" height="52" rx="3" fill="#35d18b" />
+  <text x="54" y="54"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="18" font-weight="700" letter-spacing="1.5" fill="#35d18b">03 / MODULES</text>
+  <text x="54" y="88"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+        font-size="40" font-weight="800" fill="#eef2f7">Forensics, Tor Shield &amp; Panic</text>
+  <text x="1152" y="72" text-anchor="end"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="18" fill="#7d8998">CORE + NETSTACK</text>
+</svg>

@@ -24,7 +24,9 @@ Unlike conventional cleanup scripts, AnonVoid is engineered around two strict in
 
 ---
 
-## Core Security Pillars
+<p align="center">
+  <img src="./assets/readme/section-pillars.svg" width="100%" alt="01 — Core Security Pillars" />
+</p>
 
 | Principle | Implementation & Technical Standard |
 | :--- | :--- |
@@ -36,7 +38,9 @@ Unlike conventional cleanup scripts, AnonVoid is engineered around two strict in
 
 ---
 
-## System Architecture
+<p align="center">
+  <img src="./assets/readme/section-architecture.svg" width="100%" alt="02 — System Architecture" />
+</p>
 
 AnonVoid enforces a two-tier boundary between the unprivileged user interface and the privileged system core:
 
@@ -46,7 +50,9 @@ AnonVoid enforces a two-tier boundary between the unprivileged user interface an
 
 ---
 
-## Capabilities
+<p align="center">
+  <img src="./assets/readme/section-capabilities.svg" width="100%" alt="03 — Forensics, Tor Shield, and Panic Capabilities" />
+</p>
 
 ### 1. Forensics Core (`core/forensics/`)
 * **Shell & REPL History Shredding:** Multi-pass overwrite (`/dev/urandom` and `0x00`) for `bash`, `zsh`, `fish`, `python`, `mysql`, `psql`, and `node` histories.
@@ -74,12 +80,8 @@ Triggered from the GUI panic button, CLI `--panic`, or physical removal of an au
 3. Flushes Linux RAM caches.
 4. Optionally executes an immediate panic shutdown.
 
----
-
-## PyQt6 Desktop Interface & Themes
-
+### PyQt6 Desktop Interface & Themes
 AnonVoid includes a PyQt6 desktop interface with **5 dynamic themes** tuned for low-glare and high-visibility environments:
-
 * **OLED:** Deep dark slate (`#090b0f`) with crisp high-contrast accents.
 * **Circuit:** Deep PCB emerald (`#070c0a`) with `#34d399` highlights.
 * **Binary:** Cyber blue (`#00d4ff`) over deep navy surfaces.
@@ -88,7 +90,9 @@ AnonVoid includes a PyQt6 desktop interface with **5 dynamic themes** tuned for 
 
 ---
 
-## Quick Start & Installation
+<p align="center">
+  <img src="./assets/readme/section-quickstart.svg" width="100%" alt="04 — Quick Start and CLI" />
+</p>
 
 ### Requirements
 * **OS:** Kali Linux, Debian 11+, Ubuntu 20.04+, Arch Linux, Fedora 36+
@@ -103,23 +107,11 @@ cd AnonVoid
 sudo bash install.sh
 ```
 
-The installer automatically:
-1. Creates the `anonvoid` system group and adds your user.
-2. Checks required dependencies (`tor`, `nftables`, `python3-pyqt6`, etc.).
-3. Installs and starts the `anonvoid.service` systemd daemon.
-4. Registers `/usr/local/bin/anonvoid` and the desktop entry (`.desktop`).
+The installer creates the `anonvoid` system group, checks dependencies (`tor`, `nftables`, `python3-pyqt6`), installs and starts `anonvoid.service`, and registers `/usr/local/bin/anonvoid` plus the `.desktop` entry.
 
-> **Note:** Log out and back in—or run `newgrp anonvoid`—for group membership to take effect.
+> **Note:** Log out and back in—or run `newgrp anonvoid`—for group membership to take effect. To uninstall cleanly, run `sudo bash install.sh --uninstall`.
 
-### Uninstall
-
-```bash
-sudo bash install.sh --uninstall
-```
-
----
-
-## CLI Usage
+### CLI Usage
 
 ```bash
 # Launch the PyQt6 Desktop GUI (as an unprivileged user)

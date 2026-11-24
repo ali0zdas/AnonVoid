@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="120" viewBox="0 0 1200 120"
+     role="img" aria-labelledby="sec4-title sec4-desc">
+  <title id="sec4-title">Quick Start and CLI</title>
+  <desc id="sec4-desc">Section header for AnonVoid installation and CLI reference.</desc>
+  <rect width="1200" height="120" rx="16" fill="#090b0f" />
+  <rect x="1" y="1" width="1198" height="118" rx="15" fill="none" stroke="#212833" stroke-width="2" />
+  <rect x="32" y="34" width="6" height="52" rx="3" fill="#4f97ff" />
+  <text x="54" y="54"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="18" font-weight="700" letter-spacing="1.5" fill="#4f97ff">04 / DEPLOY &amp; RUN</text>
+  <text x="54" y="88"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+        font-size="40" font-weight="800" fill="#eef2f7">Quick Start &amp; CLI</text>
+  <text x="1152" y="72" text-anchor="end"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="18" fill="#7d8998">INSTALL.SH</text>
+</svg>
